@@ -36,9 +36,9 @@ try {
     $unpack = Join-Path $temporaryRoot 'package'
     & $makeappx unpack /p $Package /d $unpack /o
     if ($LASTEXITCODE -ne 0) { throw "MakeAppx unpack failed ($LASTEXITCODE)." }
-    & $makeappx validate /p $Package
-    if ($LASTEXITCODE -ne 0) { throw "MakeAppx package validation failed ($LASTEXITCODE)." }
 
+    # MakeAppx has no standalone "validate" command. Successful unpack checks the APPX container;
+    # SignTool below verifies the package signature and its block-map integrity.
     $signatureOutput = (& $signtool verify /pa /all /v $Package 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "APPX signature verification failed: $signatureOutput" }
     if ($signatureOutput -notmatch [regex]::Escape($ExpectedPublisher)) {
