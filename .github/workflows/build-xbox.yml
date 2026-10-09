@@ -401,6 +401,7 @@ jobs:
           $pfxPath = Join-Path $env:RUNNER_TEMP 'eden-development-signing.pfx'
           [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
           $password = ConvertTo-SecureString $env:SIGNING_PASSWORD -AsPlainText -Force
+          Write-Host 'Importing the pinned signing PFX into the current-user personal store.'
           $certs = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
           Write-Host 'Imported signing PFX into the current-user personal store.'
           $cert = $certs | Where-Object { $_.Thumbprint -eq ($env:SIGNING_THUMBPRINT -replace '\s','') } | Select-Object -First 1
@@ -414,8 +415,15 @@ jobs:
           $ekuOids = @($eku.EnhancedKeyUsages | ForEach-Object { $_.Value })
           if ('1.3.6.1.5.5.7.3.3' -notin $ekuOids) { throw 'Pinned certificate lacks the code-signing EKU.' }
           Write-Host 'Validated the pinned certificate code-signing EKU.'
-          Export-Certificate -Cert $cert -FilePath (Join-Path $env:RUNNER_TEMP 'eden-development-root.cer') -Type CERT -Force | Out-Null
-          Import-Certificate -FilePath (Join-Path $env:RUNNER_TEMP 'eden-development-root.cer') -CertStoreLocation Cert:\CurrentUser\Root -Confirm:$false | Out-Null
+          $rootCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-root.cer'
+          Write-Host 'Exporting the validated public certificate for package verification.'
+          Export-Certificate -Cert $cert -FilePath $rootCertificatePath -Type CERT -Force | Out-Null
+          if (-not (Test-Path -LiteralPath $rootCertificatePath)) { throw 'The validated public certificate was not exported.' }
+          Write-Host 'Adding the validated public certificate to the current-user root store.'
+          $certutil = Join-Path $env:WINDIR 'System32\certutil.exe'
+          if (-not (Test-Path -LiteralPath $certutil)) { throw 'Windows certutil.exe is missing.' }
+          & $certutil -user -f -addstore Root $rootCertificatePath
+          if ($LASTEXITCODE -ne 0) { throw "Non-interactive root certificate import failed (exit=$LASTEXITCODE)." }
           Write-Host 'Imported the validated public certificate into the current-user root store.'
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
 
