@@ -11,8 +11,7 @@ on:
       - README.en.md
       - README-developer.md
       - README-macos.md
-      - docs/xbox/community-release.md
-      - docs/xbox/ci_macos_maintenance.md
+      - docs/**
       - tools/xbox/package-appx.ps1
       - tools/xbox/validate-appx.ps1
   workflow_dispatch:
