@@ -150,12 +150,13 @@ jobs:
           $vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvarsall.bat'
           $probe = "`"$vcvars`" x64 uwp $env:EDEN_WINDOWS_SDK_VERSION >nul && set"
           $envText = & $env:ComSpec /d /s /c $probe 2>&1 | Out-String
-          $libPath = [regex]::Match($envText, '(?im)^LIB=(.*)$').Groups[1].Value
-          $platform = [regex]::Match($envText, '(?im)^VSCMD_ARG_APP_PLAT=(.*)$').Groups[1].Value
+          $probeExitCode = $LASTEXITCODE
+          $libPath = [regex]::Match($envText, '(?im)^LIB=(.*)$').Groups[1].Value.Trim()
+          $platform = [regex]::Match($envText, '(?im)^VSCMD_ARG_APP_PLAT=(.*)$').Groups[1].Value.Trim()
           $selectedSdk = [regex]::Match($envText, '(?im)^WindowsSDKVersion=(.*)$').Groups[1].Value.Trim().TrimEnd([char]92)
-          if ($LASTEXITCODE -ne 0 -or $libPath -notmatch 'x64\\store' -or $platform -ne 'UWP' -or $selectedSdk -ne $env:EDEN_WINDOWS_SDK_VERSION) {
+          if ($probeExitCode -ne 0 -or $libPath -notmatch 'x64\\store' -or $platform -ne 'UWP' -or $selectedSdk -ne $env:EDEN_WINDOWS_SDK_VERSION) {
             $storeCrtFound = $libPath -match 'x64\\store'
-            throw "vcvarsall failed its UWP toolchain preflight (Store CRT=$storeCrtFound; platform=$platform; SDK=$selectedSdk)."
+            throw "vcvarsall failed its UWP toolchain preflight (exit=$probeExitCode; Store CRT=$storeCrtFound; platform=[$platform]; SDK=[$selectedSdk])."
           }
           $cmake = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
           $ninja = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
