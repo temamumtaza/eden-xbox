@@ -91,7 +91,9 @@ jobs:
           for file in "${required[@]}"; do
             test -s "package/$file" || { echo "Missing release file: $file" >&2; exit 1; }
           done
-          (cd package && sha256sum --check --strict SHA256SUMS.txt)
+          tr -d '\r' < package/SHA256SUMS.txt > package/SHA256SUMS.lf
+          (cd package && sha256sum --check --strict SHA256SUMS.lf)
+          rm package/SHA256SUMS.lf
           jq -e --arg run "$BUILD_RUN_ID" '
             (.package_workflow_run_id | tostring) == $run and
             (.source_commit | test("^[0-9a-f]{40}$")) and
