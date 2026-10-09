@@ -434,19 +434,14 @@ jobs:
           $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCertificatePath)
           $expectedThumbprint = $env:SIGNING_THUMBPRINT -replace '\s',''
           if ($publicCert.Thumbprint -ne $expectedThumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
-          $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-            [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-          )
-          try {
-            Write-Host 'Opening current-user root store.'
-            $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            Write-Host 'Adding pinned public certificate to current-user root store.'
-            $rootStore.Add($publicCert)
-            Write-Host 'Added pinned public certificate to current-user root store.'
-          } finally {
-            $rootStore.Close()
-          }
+          $certutil = Join-Path $env:WINDIR 'System32\certutil.exe'
+          if (-not (Test-Path -LiteralPath $certutil)) { throw 'Windows certutil.exe is missing.' }
+          Write-Host 'Adding the thumbprint-validated public certificate to the current-user root store.'
+          $certutilOutput = @('Y') | & $certutil -user -f -addstore Root $rootCertificatePath 2>&1
+          $certutilExit = $LASTEXITCODE
+          $certutilOutput | ForEach-Object { Write-Host $_ }
+          if ($certutilExit -ne 0) { throw "certutil root-store import failed (exit=$certutilExit)." }
+          Write-Host 'Added pinned public certificate to current-user root store.'
 
       - name: Package, sign, and require shader and CRT runtime
         shell: pwsh
