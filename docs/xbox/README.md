@@ -5,9 +5,11 @@ La rama de trabajo es `xbox`; las reglas del proyecto están en [AGENTS.md](../.
 
 ## Arranque y despliegue
 
+- [Guía rápida para macOS](../../README-macos.md): ejecutar el build en Actions, instalarlo y recopilar logs.
 - [Cuaderno del proyecto](xbox_internal.md): estado, decisiones, trampas y resultados de pruebas.
-- [Compilación UWP](uwp_build.md): toolchain y configuración inicial; conserva el contexto histórico de la fase 2.
-- [Despliegue en Series](xbox_deploy.md): empaquetado, instalación y diagnóstico de activación.
+- [Compilación UWP](uwp_build.md): build actual de la app completa y el renderer D3D12.
+- [Despliegue en Series](xbox_deploy.md): instalación macOS-to-Xbox y diagnóstico de arranque.
+- [Mantenimiento de CI](ci_macos_maintenance.md): signing, versiones, rollback y sincronización upstream.
 
 ## Diseño y funciones
 

@@ -1,0 +1,83 @@
+name: Sync upstream Xbox
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: xbox-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream, then dispatch the verified build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the fork's default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect upstream changes and create an isolated candidate branch
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/JulianDr14/eden-xbox.git
+          git fetch --no-tags upstream xbox
+          git fetch --no-tags origin xbox
+          base_sha="$(git rev-parse refs/remotes/origin/xbox)"
+          upstream_sha="$(git rev-parse refs/remotes/upstream/xbox)"
+          if git merge-base --is-ancestor "$upstream_sha" "$base_sha"; then
+            echo 'Upstream xbox is already included in the fork.'
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="automation/upstream-xbox-${upstream_sha:0:12}"
+          remote_branch="$(git ls-remote --heads origin "refs/heads/${branch}" | cut -f2)"
+          if [[ -n "$remote_branch" ]]; then
+            echo "Candidate branch $branch already exists; leaving it unchanged for review."
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git switch --create "$branch" "$base_sha"
+          if ! git merge --no-commit --no-ff "$upstream_sha"; then
+            git merge --abort || true
+            echo "Upstream merge conflict for ${upstream_sha}; no branch was pushed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # Keep automation and secret-bearing workflow definitions from this fork's xbox branch.
+          git checkout "$base_sha" -- .github/workflows/
+          git add -u .github/workflows/
+          git commit --no-edit
+          git push origin "HEAD:refs/heads/${branch}"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "Created ${branch} from upstream commit ${upstream_sha}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch the Windows build for the candidate
+        if: steps.candidate.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ steps.candidate.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${REPOSITORY}/actions/workflows/build-xbox.yml/dispatches" \
+            -f "ref=${BRANCH}" \
+            -f "inputs[source_ref]=${BRANCH}" \
+            -F 'inputs[clean_build]=false'
+          echo "Dispatched Build Eden Xbox for ${BRANCH}. A draft PR is opened only if packaging and validation pass." >> "$GITHUB_STEP_SUMMARY"

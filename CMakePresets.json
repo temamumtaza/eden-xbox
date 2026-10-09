@@ -1,11 +1,11 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "cmakeMinimumRequired": { "major": 3, "minor": 31, "patch": 0 },
   "configurePresets": [
     {
       "name": "uwp-x64",
-      "displayName": "Xbox UWP / AppContainer (x64, headless core)",
-      "description": "Configures Eden's core stack (common/core/dynarmic/video_core/...) for the Xbox UWP/WindowsStore (AppContainer) target. Desktop frontends are off; dynarmic builds in its W^X + Virtual*FromApp mode. Headless: the Null renderer is chosen at runtime (Vulkan stays compiled). IMPORTANT: run from a 'vcvarsall.bat x64 uwp' shell so cl/link target the Store CRT (see docs/xbox/uwp_build.md). The Ninja generator avoids the VS-instance lookup the VS generator requires.",
+      "displayName": "Xbox UWP / AppContainer (x64)",
+      "description": "Configures the Eden UWP frontend and Direct3D 12 renderer for Xbox Dev Mode. Dynarmic uses W^X and Virtual*FromApp in the Store CRT AppContainer. Run from tools/xbox/build-env.bat so CMake and Ninja use the selected UWP SDK and Store CRT (see docs/xbox/uwp_build.md).",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-uwp",
       "cacheVariables": {
@@ -32,7 +32,7 @@
     {
       "name": "uwp-x64",
       "configurePreset": "uwp-x64",
-      "description": "Build the Eden core stack for UWP. Add --target <core|dynarmic|common|video_core> to scope."
+      "description": "Build the Eden UWP Xbox app. Use --target eden-uwp for the installable frontend."
     }
   ]
 }

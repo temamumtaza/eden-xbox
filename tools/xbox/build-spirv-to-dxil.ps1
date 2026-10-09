@@ -13,6 +13,7 @@
 param(
     [string] $WorkDir = (Join-Path $PSScriptRoot "..\..\..\mesa-build"),
     [string] $MesaVersion = "26.2.3",
+    [string] $MesaSha256 = "1628058a8d2c0615975de5a15ab7bbb9638c50000b5bed9456ff423ea034a81f",
     # Wipe and reconfigure the build tree (after changing options or the Mesa version).
     [switch] $Reconfigure
 )
@@ -31,6 +32,10 @@ if (-not (Test-Path (Join-Path $src "meson.build"))) {
         Write-Host "downloading Mesa $MesaVersion ..."
         Invoke-WebRequest "https://archive.mesa3d.org/mesa-$MesaVersion.tar.xz" -OutFile $tarball
     }
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tarball).Hash.ToLowerInvariant()
+    if ($actualHash -ne $MesaSha256.ToLowerInvariant()) {
+        throw "Mesa $MesaVersion archive SHA-256 mismatch: expected $MesaSha256, got $actualHash"
+    }
     Write-Host "extracting $tarball ..."
     # tar reports errors for the few symlinks in the tarball (CI files, not needed here): the check
     # below is what decides whether extraction worked.
@@ -42,8 +47,20 @@ if (-not (Test-Path (Join-Path $src "meson.build"))) {
 function Patch-File([string] $rel, [string] $old, [string] $new) {
     $path = Join-Path $src $rel
     $text = [IO.File]::ReadAllText($path)
-    if ($text.Contains($new)) { return }
-    if (-not $text.Contains($old)) { throw "$rel changed upstream: the patch no longer applies" }
+    $newFirst = $text.IndexOf($new, [StringComparison]::Ordinal)
+    if ($newFirst -ge 0) {
+        $outsideReplacement = $text.Remove($newFirst, $new.Length)
+        if ($text.IndexOf($new, $newFirst + $new.Length, [StringComparison]::Ordinal) -ge 0 -or
+            $outsideReplacement.IndexOf($old, [StringComparison]::Ordinal) -ge 0) {
+            throw "$rel changed upstream: the patch state is ambiguous"
+        }
+        return
+    }
+    $first = $text.IndexOf($old, [StringComparison]::Ordinal)
+    if ($first -lt 0) { throw "$rel changed upstream: the patch no longer applies" }
+    if ($text.IndexOf($old, $first + $old.Length, [StringComparison]::Ordinal) -ge 0) {
+        throw "$rel changed upstream: the patch matched more than once"
+    }
     [IO.File]::WriteAllText($path, $text.Replace($old, $new))
     Write-Host "patched  : $rel"
 }
@@ -77,7 +94,9 @@ Patch-File "src\microsoft\spirv_to_dxil\meson.build" `
 if (-not (Test-Path (Join-Path $venv "Scripts\meson.exe"))) {
     Write-Host "creating the meson venv ..."
     & python -m venv $venv
-    & (Join-Path $venv "Scripts\pip.exe") install --quiet meson mako pyyaml packaging
+    if ($LASTEXITCODE) { throw "creating the meson venv failed" }
+    & (Join-Path $venv "Scripts\pip.exe") install --quiet `
+        meson==1.9.1 mako==1.3.10 pyyaml==6.0.3 packaging==25.0
     if ($LASTEXITCODE) { throw "pip install failed" }
 }
 
@@ -89,11 +108,19 @@ $vsRoot = & vswhere -latest -products * -requires Microsoft.VisualStudio.Compone
 if (-not $vsRoot) { throw "no Visual Studio instance with the C++ toolset was found" }
 $env:VSLANG = "1033"
 $vcvars = Join-Path $vsRoot "VC\Auxiliary\Build\vcvarsall.bat"
-foreach ($line in (& cmd.exe /c "`"$vcvars`" x64 >nul && set")) {
+$vcvarsArgs = "x64"
+if ($env:EDEN_WINDOWS_SDK_VERSION) { $vcvarsArgs += " $env:EDEN_WINDOWS_SDK_VERSION" }
+foreach ($line in (& cmd.exe /c "`"$vcvars`" $vcvarsArgs >nul && set")) {
     if ($line -match "^([^=]+)=(.*)$") { Set-Item "env:$($Matches[1])" $Matches[2] }
 }
 $env:PATH = "$vsRoot\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;$venv\Scripts;$env:PATH"
 if (-not $env:VCToolsInstallDir) { throw "vcvarsall x64 failed" }
+if ($env:EDEN_WINDOWS_SDK_VERSION) {
+    $selectedSdk = $env:WindowsSDKVersion.TrimEnd('\')
+    if ($selectedSdk -ne $env:EDEN_WINDOWS_SDK_VERSION) {
+        throw "vcvarsall selected Windows SDK $selectedSdk instead of $env:EDEN_WINDOWS_SDK_VERSION"
+    }
+}
 
 # --- Configure ------------------------------------------------------------------------------
 $storeLib = (Join-Path $env:VCToolsInstallDir "lib\x64\store").Replace("\", "/")

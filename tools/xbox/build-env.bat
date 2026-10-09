@@ -28,8 +28,17 @@ REM prefix byte for byte, and a localized prefix (e.g. Spanish) that drifts from
 REM cached silently stops header edits from triggering rebuilds. Needs the VS English language pack.
 set VSLANG=1033
 
-call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x64 uwp
+set "VCVARS_ARGS=x64 uwp"
+if defined EDEN_WINDOWS_SDK_VERSION set "VCVARS_ARGS=x64 uwp %EDEN_WINDOWS_SDK_VERSION%"
+call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" %VCVARS_ARGS%
 if errorlevel 1 ( echo ERROR: vcvarsall x64 uwp failed. & exit /b 1 )
+
+REM When CI pins a Windows SDK, reject vcvarsall silently choosing a different installed version.
+if defined EDEN_WINDOWS_SDK_VERSION for /f "tokens=1 delims=\" %%S in ("%WindowsSDKVersion%") do set "EDEN_SELECTED_SDK=%%S"
+if defined EDEN_WINDOWS_SDK_VERSION if /I not "%EDEN_SELECTED_SDK%"=="%EDEN_WINDOWS_SDK_VERSION%" (
+    echo ERROR: requested Windows SDK %EDEN_WINDOWS_SDK_VERSION%, selected %WindowsSDKVersion%.
+    exit /b 1
+)
 
 REM VS's CMake + Ninja must come first; a stray CMake elsewhere on PATH (Strawberry Perl bundles
 REM one) would otherwise win.

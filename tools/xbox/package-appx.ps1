@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Stages, packs and signs the Phase-2 headless boot appx (src/eden_uwp) for sideloading
+# Stages, packs and signs the Eden Xbox UWP frontend (src/eden_uwp) for sideloading
 # onto an Xbox Series X|S in Dev Mode. See docs/xbox/xbox_deploy.md for the full flow.
 #
 #   .\tools\xbox\package-appx.ps1 -BootNro C:\path\to\boot.nro
@@ -36,9 +36,14 @@ param(
     [string[]] $BootCfg = @(),
     # Must match Identity/@Publisher in dist/uwp/AppxManifest.xml, character for character.
     [string] $PublisherCN = "CN=EdenXboxDev",
+    [string] $SigningCertificateThumbprint,
+    [string] $PackageVersion,
+    [switch] $RequireRuntimeFiles,
+    [string] $VCLibsPackage,
     # Mesa's SPIR-V -> DXIL translator for the D3D12 renderer, built by build-spirv-to-dxil.ps1.
     # Without it the renderer still presents, through its CPU fallback.
     [string] $SpirvToDxil = "..\mesa-build\build-uwp\src\microsoft\spirv_to_dxil\spirv_to_dxil.dll",
+    [string] $WindowsSdkVersion = $env:EDEN_WINDOWS_SDK_VERSION,
     [string] $OutDir = "build-uwp\package"
 )
 
@@ -49,6 +54,13 @@ Set-Location $repo
 
 function Find-SdkTool([string] $name) {
     $roots = @("${env:ProgramFiles(x86)}\Windows Kits\10\bin", "${env:ProgramFiles}\Windows Kits\10\bin")
+    if ($WindowsSdkVersion) {
+        $exact = $roots | ForEach-Object {
+            Get-ChildItem (Join-Path (Join-Path $_ $WindowsSdkVersion) "x64") -Filter $name -ErrorAction SilentlyContinue
+        } | Select-Object -First 1
+        if ($exact) { return $exact.FullName }
+        throw "$name not found in the pinned Windows SDK $WindowsSdkVersion."
+    }
     $hit = $roots | Where-Object { Test-Path $_ } | ForEach-Object {
         Get-ChildItem $_ -Recurse -Filter $name -ErrorAction SilentlyContinue |
             Where-Object { $_.DirectoryName -like '*\x64' }
@@ -58,9 +70,10 @@ function Find-SdkTool([string] $name) {
 }
 
 # --- 1. locate the built exe -------------------------------------------------------------
-$exe = Join-Path $repo "$BuildDir\bin\eden-uwp.exe"
+$buildRoot = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $repo $BuildDir }
+$exe = Join-Path $buildRoot "bin\eden-uwp.exe"
 if (-not (Test-Path $exe)) {
-    $found = Get-ChildItem (Join-Path $repo $BuildDir) -Recurse -Filter eden-uwp.exe -ErrorAction SilentlyContinue |
+    $found = Get-ChildItem $buildRoot -Recurse -Filter eden-uwp.exe -ErrorAction SilentlyContinue |
              Select-Object -First 1
     if (-not $found) {
         throw "eden-uwp.exe not found under $BuildDir. Build it first from a 'vcvarsall.bat x64 uwp' shell:`n" +
@@ -76,7 +89,18 @@ if (Test-Path $layout) { Remove-Item $layout -Recurse -Force }
 New-Item -ItemType Directory -Path $layout -Force | Out-Null
 
 Copy-Item $exe $layout
-Copy-Item (Join-Path $repo "dist\uwp\AppxManifest.xml") $layout
+$manifestPath = Join-Path $layout "AppxManifest.xml"
+Copy-Item (Join-Path $repo "dist\uwp\AppxManifest.xml") $manifestPath
+if ($PackageVersion) {
+    if ($PackageVersion -notmatch '^0\.3\.(\d{1,5})\.(\d{1,5})$' -or
+        [int]$Matches[1] -gt 65535 -or [int]$Matches[2] -gt 65535) {
+        throw "PackageVersion must be 0.3.<0-65535>.<0-65535>."
+    }
+    [xml]$stagedManifest = Get-Content -LiteralPath $manifestPath -Raw
+    $stagedManifest.Package.Identity.SetAttribute("Version", $PackageVersion)
+    [IO.File]::WriteAllText($manifestPath, $stagedManifest.OuterXml,
+        [System.Text.UTF8Encoding]::new($false))
+}
 Copy-Item (Join-Path $repo "dist\uwp\Assets") $layout -Recurse
 # Use Eden's existing artwork in the launcher, preserving the upstream asset.
 Copy-Item -LiteralPath (Join-Path $repo 'dist\qt_themes\default\icons\256x256\eden.png') `
@@ -101,6 +125,15 @@ if (Test-Path $s2d) {
     }
 } else {
     Write-Warning "spirv_to_dxil.dll not found ($s2d): the D3D12 renderer will present through the CPU."
+}
+
+# In CI the native shader path and SDK validator are required. Local exploratory packages may keep
+# the upstream CPU-presentation fallback by omitting -RequireRuntimeFiles.
+if ($RequireRuntimeFiles -and -not (Test-Path (Join-Path $layout "spirv_to_dxil.dll"))) {
+    throw "Required D3D12 shader translator spirv_to_dxil.dll is missing."
+}
+if ($RequireRuntimeFiles -and -not (Test-Path (Join-Path $layout "dxil.dll"))) {
+    throw "Required Windows SDK DXIL validator dxil.dll was not packaged."
 }
 
 # User data (keys, firmware, game): see the parameters above.
@@ -170,6 +203,19 @@ if ($mf.Package.Identity.Publisher -ne $PublisherCN) {
     throw "Publisher mismatch: manifest has '$($mf.Package.Identity.Publisher)' but signing with '$PublisherCN'."
 }
 
+# Locate the framework before packing/signing so strict CI cannot emit a broken package.
+$vclibs = $null
+if ($VCLibsPackage -and (Test-Path -LiteralPath $VCLibsPackage)) { $vclibs = (Resolve-Path -LiteralPath $VCLibsPackage).Path }
+foreach ($pf in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+    if ($vclibs) { break }
+    if (-not $pf) { continue }
+    $cand = Join-Path $pf "Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx"
+    if (Test-Path -LiteralPath $cand) { $vclibs = $cand; break }
+}
+if ($RequireRuntimeFiles -and -not $vclibs) {
+    throw "Required Microsoft.VCLibs.x64.14.00.appx is missing. Install the v143 UWP VC tools."
+}
+
 # --- 3. pack -----------------------------------------------------------------------------
 $makeappx = Find-SdkTool "MakeAppx.exe"
 $appx = Join-Path $repo "$OutDir\eden-xbox.appx"
@@ -183,18 +229,27 @@ if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed ($LASTEXITCODE)." }
 # --- 4. sign -----------------------------------------------------------------------------
 # Reuse a matching cert if one is already in the user store, else mint a self-signed one.
 $cert = Get-ChildItem Cert:\CurrentUser\My |
-        Where-Object { $_.Subject -eq $PublisherCN -and $_.NotAfter -gt (Get-Date) } |
+        Where-Object {
+            $thumbprintMatches = -not $SigningCertificateThumbprint -or
+                $_.Thumbprint -eq ($SigningCertificateThumbprint -replace '\s', '')
+            $thumbprintMatches -and $_.Subject -eq $PublisherCN -and $_.NotAfter -gt (Get-Date) -and $_.HasPrivateKey
+        } |
         Select-Object -First 1
 if (-not $cert) {
+    if ($SigningCertificateThumbprint) { throw "Pinned signing certificate was not imported or has expired." }
     Write-Host "minting a self-signed code-signing cert for $PublisherCN"
     $cert = New-SelfSignedCertificate -Type Custom -Subject $PublisherCN `
         -KeyUsage DigitalSignature -FriendlyName "Eden Xbox sideload" `
         -CertStoreLocation "Cert:\CurrentUser\My" `
         -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
 }
+if ($SigningCertificateThumbprint -and
+    $cert.Thumbprint -ne ($SigningCertificateThumbprint -replace '\s', '')) {
+    throw "Imported signer thumbprint does not match the configured pin."
+}
 
 $signtool = Find-SdkTool "SignTool.exe"
-& $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /t http://timestamp.digicert.com $appx
+& $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /tr https://timestamp.digicert.com /td SHA256 $appx
 if ($LASTEXITCODE -ne 0) { throw "SignTool failed ($LASTEXITCODE)." }
 
 # The console must trust the signer: upload this .cer alongside the appx in the Device Portal.
@@ -206,12 +261,6 @@ Export-Certificate -Cert $cert -FilePath $cer -Type CERT | Out-Null
 # package rather than ours (see the PackageDependency in the manifest). The console needs it
 # installed too, so hand it over next to our package instead of leaving the user to find it.
 # It ships with the VS "C++ (v143) UWP tools" component, as an Extension SDK.
-$vclibs = $null
-foreach ($pf in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
-    if (-not $pf) { continue }
-    $cand = Join-Path $pf "Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx"
-    if (Test-Path -LiteralPath $cand) { $vclibs = $cand; break }
-}
 if ($vclibs) {
     $vcOut = Join-Path $repo "$OutDir\Microsoft.VCLibs.x64.14.00.appx"
     Copy-Item -LiteralPath $vclibs -Destination $vcOut -Force
