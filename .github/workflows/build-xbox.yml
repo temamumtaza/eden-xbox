@@ -420,10 +420,22 @@ jobs:
           Export-Certificate -Cert $cert -FilePath $rootCertificatePath -Type CERT -Force | Out-Null
           if (-not (Test-Path -LiteralPath $rootCertificatePath)) { throw 'The validated public certificate was not exported.' }
           Write-Host 'Adding the validated public certificate to the current-user root store.'
-          $certutil = Join-Path $env:WINDIR 'System32\certutil.exe'
-          if (-not (Test-Path -LiteralPath $certutil)) { throw 'Windows certutil.exe is missing.' }
-          & $certutil -user -f -addstore Root $rootCertificatePath
-          if ($LASTEXITCODE -ne 0) { throw "Non-interactive root certificate import failed (exit=$LASTEXITCODE)." }
+          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCertificatePath)
+          if ($publicCert.Thumbprint -ne $cert.Thumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
+          $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
+          try {
+            $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $findByThumbprint = [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint
+            $alreadyTrusted = $rootStore.Certificates.Find($findByThumbprint, $cert.Thumbprint, $false)
+            if ($alreadyTrusted.Count -eq 0) { $rootStore.Add($publicCert) }
+            $trusted = $rootStore.Certificates.Find($findByThumbprint, $cert.Thumbprint, $false)
+            if ($trusted.Count -eq 0) { throw 'Pinned public certificate was not added to the current-user root store.' }
+          } finally {
+            $rootStore.Close()
+          }
           Write-Host 'Imported the validated public certificate into the current-user root store.'
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
 
