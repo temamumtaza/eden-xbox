@@ -478,7 +478,7 @@ def app_package(items: list[dict]) -> dict | None:
     for item in items:
         name = str(item.get("Name", ""))
         family = str(item.get("PackageFamilyName", ""))
-        if name == APP_IDENTITY or family.startswith(APP_IDENTITY + "_"):
+        if name == APP_IDENTITY or family == APP_IDENTITY or family.startswith(APP_IDENTITY + "_"):
             return item
     return None
 
