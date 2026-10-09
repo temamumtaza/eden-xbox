@@ -1,0 +1,175 @@
+name: Prepare Xbox Release Draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Build Eden Xbox run ID with an unexpired signed package artifact
+        required: true
+        type: string
+      tag_name:
+        description: New release tag, for example v0.3.0-preview.1
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  draft-release:
+    name: Verify package and create a draft prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Validate the successful build run and package artifact
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo 'Build run ID must contain digits only.' >&2; exit 1; }
+          [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo 'Tag must use vMAJOR.MINOR.PATCH with an optional prerelease suffix.' >&2; exit 1;
+          }
+
+          run_json="$(gh api "repos/${REPOSITORY}/actions/runs/${BUILD_RUN_ID}")"
+          jq -e --arg repo "$REPOSITORY" '
+            .status == "completed" and
+            .conclusion == "success" and
+            .path == ".github/workflows/build-xbox.yml" and
+            .head_repository.full_name == $repo and
+            (.head_sha | test("^[0-9a-f]{40}$"))
+          ' <<<"$run_json" >/dev/null || {
+            echo 'Selected run is not a successful Build Eden Xbox run from this repository.' >&2; exit 1;
+          }
+          workflow_run_url="$(jq -r '.html_url' <<<"$run_json")"
+          artifacts="$(gh api "repos/${REPOSITORY}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100")"
+          matching="$(jq -c '[.artifacts[] | select(.expired == false and (.name | startswith("eden-xbox-series-s-")))]' <<<"$artifacts")"
+          [[ "$(jq 'length' <<<"$matching")" == 1 ]] || {
+            echo 'Expected exactly one unexpired signed Xbox package artifact.' >&2; exit 1;
+          }
+          artifact_name="$(jq -r '.[0].name' <<<"$matching")"
+          if gh release view "$TAG_NAME" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists." >&2; exit 1;
+          fi
+          if gh api "repos/${REPOSITORY}/git/ref/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Git tag $TAG_NAME already exists." >&2; exit 1;
+          fi
+          {
+            echo "artifact_name=$artifact_name"
+            echo "workflow_run_url=$workflow_run_url"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download the signed package artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.source.outputs.artifact_name }}
+          path: package
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+
+      - name: Verify package checksums and resolve its exact source revision
+        id: metadata
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            eden-xbox.appx
+            eden-xbox.cer
+            Microsoft.VCLibs.x64.14.00.appx
+            SHA256SUMS.txt
+            build-metadata.json
+          )
+          for file in "${required[@]}"; do
+            test -s "package/$file" || { echo "Missing release file: $file" >&2; exit 1; }
+          done
+          (cd package && sha256sum --check --strict SHA256SUMS.txt)
+          jq -e --arg run "$BUILD_RUN_ID" '
+            (.package_workflow_run_id | tostring) == $run and
+            (.source_commit | test("^[0-9a-f]{40}$")) and
+            (.package_version | test("^0\\.3\\.[0-9]+\\.[0-9]+$"))
+          ' package/build-metadata.json >/dev/null || {
+            echo 'Build metadata does not match the selected package run.' >&2; exit 1;
+          }
+          {
+            echo "source_sha=$(jq -r '.source_commit' package/build-metadata.json)"
+            echo "app_version=$(jq -r '.package_version' package/build-metadata.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out the exact source used by the package
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.metadata.outputs.source_sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify checksums and assemble one beginner-friendly bundle
+        id: bundle
+        env:
+          SOURCE_SHA: ${{ steps.metadata.outputs.source_sha }}
+          BUILD_RUN_URL: ${{ steps.source.outputs.workflow_run_url }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          APP_VERSION: ${{ steps.metadata.outputs.app_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_version="$APP_VERSION"
+          bundle_root="${GITHUB_WORKSPACE}/EdenXbox-${TAG_NAME}"
+          mkdir -p "$bundle_root"
+          cp package/eden-xbox.appx package/eden-xbox.cer \
+            package/Microsoft.VCLibs.x64.14.00.appx \
+            "package/SHA256SUMS.txt" "package/build-metadata.json" "$bundle_root/"
+          cp source/README.md source/README.en.md source/LICENSE.txt "$bundle_root/"
+          mkdir -p "$bundle_root/dist/qt_themes/default/icons/256x256"
+          cp source/dist/qt_themes/default/icons/256x256/eden.png \
+            "$bundle_root/dist/qt_themes/default/icons/256x256/eden.png"
+          (cd "$GITHUB_WORKSPACE" && zip -qr -9 "EdenXbox-${TAG_NAME}.zip" "EdenXbox-${TAG_NAME}")
+          sha256sum "EdenXbox-${TAG_NAME}.zip" > "EdenXbox-${TAG_NAME}.zip.sha256"
+
+          cat > release-notes.md <<EOF
+          ## English
+          Community preview for Xbox Series X|S Developer Mode. This release is signed, validated by
+          GitHub Actions, and built from source commit \`${SOURCE_SHA}\` (package version \`${app_version}\`).
+          Download the single ZIP asset and follow \`README.en.md\` inside it. Game compatibility is
+          still in development; one Xbox Series S smoke test of Wild West Crops was reported to work.
+          The package contains no Nintendo keys, firmware, or games.
+
+          ## Bahasa Indonesia
+          Preview komunitas untuk Xbox Series X|S Developer Mode. Rilis ini ditandatangani, divalidasi
+          oleh GitHub Actions, dan dibangun dari commit \`${SOURCE_SHA}\` (versi paket \`${app_version}\`).
+          Unduh satu berkas ZIP lalu ikuti \`README.md\` di dalamnya. Kompatibilitas game masih dalam
+          pengembangan; satu uji coba Wild West Crops pada Xbox Series S dilaporkan berjalan.
+          Paket ini tidak menyertakan keys, firmware, atau game Nintendo.
+
+          Build evidence: ${BUILD_RUN_URL}
+          EOF
+          printf 'tag=%s\nsource_sha=%s\napp_version=%s\n' "$TAG_NAME" "$SOURCE_SHA" "$app_version" >> "$GITHUB_OUTPUT"
+
+      - name: Create a draft prerelease for maintainer review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG_NAME: ${{ inputs.tag_name }}
+          SOURCE_SHA: ${{ steps.metadata.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG_NAME" \
+            "EdenXbox-${TAG_NAME}.zip" \
+            "EdenXbox-${TAG_NAME}.zip.sha256" \
+            --repo "$REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "Eden Xbox ${TAG_NAME} — Community Preview" \
+            --notes-file release-notes.md \
+            --draft \
+            --prerelease
+          gh release view "$TAG_NAME" --repo "$REPOSITORY" --json url,isDraft,isPrerelease
