@@ -4,7 +4,7 @@ This fork builds the Xbox UWP package on a hosted Windows runner. No Windows PC,
 
 ## Build and download
 
-1. Open the fork on GitHub, choose Actions, select Build Eden Xbox, and run it on the xbox branch. Leave Source ref blank for the latest commit on that branch. The workflow builds the UWP app and Mesa shader runtime, signs and validates the APPX, and publishes an artifact for 30 days.
+1. Open the fork on GitHub, choose Actions, select Build Eden Xbox, and run it on the xbox branch. Leave Source ref blank for the latest commit on that branch. The workflow builds the UWP app and Mesa shader runtime, signs and validates the APPX, and publishes an artifact for 30 days. If a previous run's UWP build succeeded but signing failed, set Unsigned run ID to that run's ID to reuse its build payload without recompiling; the workflow verifies that the run belongs to this workflow and branch and that its build job succeeded.
 2. Download the artifact named eden-xbox-series-s-… and unzip it. It contains the signed APPX, public certificate, Microsoft VCLibs dependency, checksums, build metadata, this guide, and the helper script.
 3. In Terminal, validate the download. Replace the path with the unzipped artifact folder:
 
