@@ -68,6 +68,9 @@
     <Capability Name="codeGeneration" />
     <!-- core/network_interface + the NS services touch sockets on startup. -->
     <Capability Name="internetClient" />
+    <!-- Local SMB/UNC shares are not covered by internetClient; the user still chooses the folder
+         through FolderPicker and its FutureAccessList grant. -->
+    <Capability Name="privateNetworkClientServer" />
     <!-- PC Nintendo Pro USB transport; joystick usage is allowed by UWP HID. -->
     <DeviceCapability Name="humanInterfaceDevice" />
   </Capabilities>

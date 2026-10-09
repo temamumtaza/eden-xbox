@@ -2547,3 +2547,13 @@ Solo se usaron archivos temporales; no se modificaron partidas del usuario.
 
 Trampa de compilacion: R_THROW no acepta una construccion Result con coma sin
 proteger; usar constexpr Result local para el error FS5305.
+
+Auditoría de almacenamiento externo (10 oct 2026): el manifiesto ahora declara
+`privateNetworkClientServer`, pero esto solo cubre la capacidad de red privada;
+no hace visibles shares SMB ni añade credenciales o acceso a carpetas privadas.
+El gate de Xbox para picker, USB/SMB, persistencia y desconexión sigue pendiente.
+`StorageDirectory::GetFile()` hereda una búsqueda que enumera todos los archivos
+hermanos; las excepciones de enumeración pueden devolver una lista parcial. El
+scanner también deja pasar silenciosamente subcarpetas por debajo de su límite de
+profundidad. Ver `docs/xbox/xbox_rom_storage.md`; no se alteró el binario al preparar
+el paquete con el artefacto ya compilado.

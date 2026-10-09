@@ -97,12 +97,15 @@ jobs:
           jq -e --arg run "$BUILD_RUN_ID" '
             (.package_workflow_run_id | tostring) == $run and
             (.source_commit | test("^[0-9a-f]{40}$")) and
+            ((.binary_source_commit // .source_commit) | test("^[0-9a-f]{40}$")) and
+            ((.package_source_commit // .source_commit) | test("^[0-9a-f]{40}$")) and
             (.package_version | test("^0\\.3\\.[0-9]+\\.[0-9]+$"))
           ' package/build-metadata.json >/dev/null || {
             echo 'Build metadata does not match the selected package run.' >&2; exit 1;
           }
           {
-            echo "source_sha=$(jq -r '.source_commit' package/build-metadata.json)"
+            echo "source_sha=$(jq -r '.binary_source_commit // .source_commit' package/build-metadata.json)"
+            echo "package_source_sha=$(jq -r '.package_source_commit // .source_commit' package/build-metadata.json)"
             echo "app_version=$(jq -r '.package_version' package/build-metadata.json)"
           } >> "$GITHUB_OUTPUT"
 
@@ -118,6 +121,7 @@ jobs:
         id: bundle
         env:
           SOURCE_SHA: ${{ steps.metadata.outputs.source_sha }}
+          PACKAGE_SOURCE_SHA: ${{ steps.metadata.outputs.package_source_sha }}
           BUILD_RUN_URL: ${{ steps.source.outputs.workflow_run_url }}
           GUIDE_SHA: ${{ github.sha }}
           TAG_NAME: ${{ inputs.tag_name }}
@@ -140,16 +144,18 @@ jobs:
 
           cat > release-notes.md <<EOF
           ## English
-          Community preview for Xbox Series X|S Developer Mode. This release is signed, validated by
-          GitHub Actions, and built from source commit \`${SOURCE_SHA}\` (package version \`${app_version}\`).
+          Community preview for Xbox Series X|S Developer Mode. This release is signed and validated by
+          GitHub Actions. The executable binary comes from source commit \`${SOURCE_SHA}\`; the package
+          manifest and packaging workflow come from \`${PACKAGE_SOURCE_SHA}\` (package version \`${app_version}\`).
           User guides and assets are from commit \`${GUIDE_SHA}\`. Download the single ZIP asset and
           follow \`README.en.md\` inside it. Game compatibility is
           still in development; one Xbox Series S smoke test of Wild West Crops was reported to work.
           The package contains no Nintendo keys, firmware, or games.
 
           ## Bahasa Indonesia
-          Preview komunitas untuk Xbox Series X|S Developer Mode. Rilis ini ditandatangani, divalidasi
-          oleh GitHub Actions, dan dibangun dari commit \`${SOURCE_SHA}\` (versi paket \`${app_version}\`).
+          Preview komunitas untuk Xbox Series X|S Developer Mode. Rilis ini ditandatangani dan divalidasi
+          oleh GitHub Actions. Binary berasal dari commit sumber \`${SOURCE_SHA}\`; manifest paket dan
+          workflow pengemasan berasal dari \`${PACKAGE_SOURCE_SHA}\` (versi paket \`${app_version}\`).
           Panduan pengguna dan aset berasal dari commit \`${GUIDE_SHA}\`. Unduh satu berkas ZIP lalu
           ikuti \`README.md\` di dalamnya. Kompatibilitas game masih dalam
           pengembangan; satu uji coba Wild West Crops pada Xbox Series S dilaporkan berjalan.
@@ -157,14 +163,14 @@ jobs:
 
           Build evidence: ${BUILD_RUN_URL}
           EOF
-          printf 'tag=%s\nsource_sha=%s\napp_version=%s\n' "$TAG_NAME" "$SOURCE_SHA" "$app_version" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\nsource_sha=%s\npackage_source_sha=%s\napp_version=%s\n' "$TAG_NAME" "$SOURCE_SHA" "$PACKAGE_SOURCE_SHA" "$app_version" >> "$GITHUB_OUTPUT"
 
       - name: Create a draft prerelease for maintainer review
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           TAG_NAME: ${{ inputs.tag_name }}
-          SOURCE_SHA: ${{ steps.metadata.outputs.source_sha }}
+          PACKAGE_SOURCE_SHA: ${{ steps.metadata.outputs.package_source_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -172,7 +178,7 @@ jobs:
             "EdenXbox-${TAG_NAME}.zip" \
             "EdenXbox-${TAG_NAME}.zip.sha256" \
             --repo "$REPOSITORY" \
-            --target "$SOURCE_SHA" \
+            --target "$PACKAGE_SOURCE_SHA" \
             --title "Eden Xbox ${TAG_NAME} — Community Preview" \
             --notes-file release-notes.md \
             --draft \

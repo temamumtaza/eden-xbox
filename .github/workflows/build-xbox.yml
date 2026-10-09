@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - .github/workflows/build-xbox.yml
       - .github/workflows/prepare-xbox-release.yml
+      - dist/uwp/AppxManifest.xml
       - README.md
       - README.en.md
       - README-developer.md
@@ -22,6 +23,10 @@ on:
         type: string
       unsigned_run_id:
         description: Existing successful build run ID to sign without rebuilding (leave blank to build)
+        required: false
+        type: string
+      package_version_override:
+        description: New package-only version, greater than the selected unsigned artifact (for example 0.3.0.19)
         required: false
         type: string
       clean_build:
@@ -293,6 +298,15 @@ jobs:
           ref: ${{ github.ref_name == 'codex/xbox-ci-macos' && github.workflow_sha || 'xbox' }}
           persist-credentials: false
 
+      - name: Record package source revision
+        id: package_revision
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw 'Unable to resolve the package source commit.' }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
       - name: Verify selected source build run and artifact
         id: prior_run
         if: ${{ inputs.unsigned_run_id != '' }}
@@ -360,6 +374,8 @@ jobs:
           PRIOR_RUN_NUMBER: ${{ steps.prior_run.outputs.source_run_number }}
           PRIOR_SOURCE_SHA: ${{ steps.prior_run.outputs.source_sha }}
           PRIOR_SOURCE_EVENT: ${{ steps.prior_run.outputs.source_event }}
+          PACKAGE_SOURCE_SHA: ${{ steps.package_revision.outputs.sha }}
+          PACKAGE_VERSION_OVERRIDE: ${{ inputs.package_version_override }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:REUSE_UNSIGNED_RUN -eq 'true') {
@@ -387,11 +403,21 @@ jobs:
             $sourceRunNumber = [long]$env:BUILD_RUN_NUMBER
           }
           if ($sourceSha -notmatch '^[0-9a-f]{40}$' -or $packageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Resolved package source metadata is invalid.' }
+          if (-not [string]::IsNullOrWhiteSpace($env:PACKAGE_VERSION_OVERRIDE)) {
+            if ($env:REUSE_UNSIGNED_RUN -ne 'true') { throw 'PackageVersionOverride is only valid when reusing an existing unsigned build.' }
+            if ($env:PACKAGE_VERSION_OVERRIDE -notmatch '^0\.3\.(\d{1,5})\.(\d{1,5})$') { throw 'PackageVersionOverride must be 0.3.<0-65535>.<0-65535>.' }
+            $parts = $env:PACKAGE_VERSION_OVERRIDE.Split('.') | ForEach-Object { [int]::Parse($_, [Globalization.CultureInfo]::InvariantCulture) }
+            if ($parts[2] -gt 65535 -or $parts[3] -gt 65535) { throw 'PackageVersionOverride components must not exceed 65535.' }
+            if ([version]$env:PACKAGE_VERSION_OVERRIDE -le [version]$packageVersion) { throw 'PackageVersionOverride must be greater than the reused artifact version.' }
+            $packageVersion = $env:PACKAGE_VERSION_OVERRIDE
+          }
+          if ($env:PACKAGE_SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Resolved package source commit is invalid.' }
           "source_sha=$sourceSha" >> $env:GITHUB_OUTPUT
+          "package_source_sha=$env:PACKAGE_SOURCE_SHA" >> $env:GITHUB_OUTPUT
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "source_run_id=$sourceRunId" >> $env:GITHUB_OUTPUT
           "source_run_number=$sourceRunNumber" >> $env:GITHUB_OUTPUT
-          Write-Host "Package source: $sourceSha; source run: $sourceRunId; version: $packageVersion"
+          Write-Host "Binary source: $sourceSha; package source: $env:PACKAGE_SOURCE_SHA; source run: $sourceRunId; version: $packageVersion"
 
       - name: Verify signer and export pinned public certificate
         id: signing
@@ -435,6 +461,7 @@ jobs:
           SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
           PACKAGE_VERSION: ${{ steps.package_source.outputs.package_version }}
           SOURCE_SHA: ${{ steps.package_source.outputs.source_sha }}
+          PACKAGE_SOURCE_SHA: ${{ steps.package_source.outputs.package_source_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           $env:EDEN_WINDOWS_SDK_VERSION = '10.0.26100.0'
@@ -448,6 +475,7 @@ jobs:
         shell: pwsh
         env:
           SOURCE_SHA: ${{ steps.package_source.outputs.source_sha }}
+          PACKAGE_SOURCE_SHA: ${{ steps.package_source.outputs.package_source_sha }}
           SOURCE_RUN_ID: ${{ steps.package_source.outputs.source_run_id }}
           SOURCE_RUN_NUMBER: ${{ steps.package_source.outputs.source_run_number }}
           PACKAGE_VERSION: ${{ steps.package_source.outputs.package_version }}
@@ -460,6 +488,8 @@ jobs:
           $out = 'build-uwp\package'
           $metadata = [ordered]@{
             source_commit = $env:SOURCE_SHA
+            binary_source_commit = $env:SOURCE_SHA
+            package_source_commit = $env:PACKAGE_SOURCE_SHA
             source_workflow_run_id = [long]$env:SOURCE_RUN_ID
             source_workflow_run_number = [long]$env:SOURCE_RUN_NUMBER
             source_workflow_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID"

@@ -34,7 +34,7 @@ Jika pemasangan gagal karena paket tidak tepercaya, pastikan sertifikat dari ZIP
 
 ## Siapkan keys, firmware, dan game milikmu
 
-Gunakan browser Device Portal untuk menaruh berkas di penyimpanan Eden. Pada **File Explorer**, buka **User Folders → LocalAppData → paket Eden → LocalState**. Nama paket bisa berbeda menurut versi; pilih paket Eden yang terpasang. Folder berikut adalah lokasi data yang dibaca Eden, bukan folder sementara.
+Gunakan browser Device Portal untuk menaruh berkas di penyimpanan Eden. Pada **File Explorer**, buka **User Folders → LocalAppData → paket Eden → LocalState**. Nama paket bisa berbeda menurut versi; pilih paket Eden yang terpasang. Folder berikut adalah lokasi data yang dibaca Eden, bukan folder sementara. Keys dan firmware juga bisa diimpor lewat **Configuración → Gestor de archivos** jika folder sumbernya tersedia di pemilih folder Xbox.
 
 Di dalam `LocalState`, buat folder yang belum ada dengan **New Folder** hingga susunannya seperti ini:
 
@@ -56,7 +56,10 @@ LocalState/
 
 ### Pasang keys milikmu
 
-Unggah `prod.keys` dan, jika tersedia, `title.keys` ke `LocalState/eden/keys/` lewat **File Explorer → Upload**. `prod.keys` wajib; `title.keys` opsional. Eden membaca keys dari lokasi ini saat dijalankan.
+Ada dua cara:
+
+- Di Eden, buka **Configuración → Gestor de archivos → Importar claves de tu consola**, lalu pilih folder yang berisi `prod.keys` langsung di dalamnya. `title.keys` boleh ada di folder yang sama, tetapi opsional. Eden menyalin dan memuat ulang keys setelah impor berhasil.
+- Atau unggah `prod.keys` dan, jika tersedia, `title.keys` ke `LocalState/eden/keys/` lewat **File Explorer → Upload**. Eden membaca keys dari lokasi ini saat dijalankan.
 
 ### Pasang firmware ZIP
 
@@ -67,11 +70,20 @@ Unggah `prod.keys` dan, jika tersedia, `title.keys` ke `LocalState/eden/keys/` l
 
 Opsi **Extract** dilakukan oleh File Explorer Device Portal saat upload ZIP; Eden membaca file hasil ekstraksi dari folder standar di atas. Microsoft mendokumentasikan parameter ekstraksi untuk upload berkas melalui [API Device Portal](https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/device-portal-api-core).
 
+Alternatifnya, ekstrak ZIP di komputer lebih dulu, lalu di Eden pilih **Configuración → Gestor de archivos → Importar firmware de tu consola** dan pilih folder yang berisi file `.nca` hasil ekstrak secara langsung. Impor firmware memerlukan keys yang valid.
+
 ### Tambahkan game
 
-Unggah dump game milikmu ke `LocalState/games/`, atau sambungkan USB yang berisi game. Untuk folder game di USB, pilih **Configuración → Gestor de archivos → Agregar carpeta de juegos**.
+Kamu bisa memakai penyimpanan internal atau lokasi eksternal:
 
-Setelah semua berkas selesai diunggah, tekan **B** dari pustaka Eden untuk keluar, lalu jalankan Eden lagi dari Dev Home. Di **Configuración → Gestor de archivos**, periksa bahwa status menunjukkan **Claves listas** dan jumlah file firmware.
+- **Penyimpanan internal:** unggah dump game milikmu ke `LocalState/games/` lewat File Explorer Device Portal.
+- **USB atau folder jaringan:** sambungkan USB, atau siapkan lokasi jaringan agar Xbox dapat melihatnya. Di Eden buka **Configuración → Gestor de archivos → Agregar carpeta de juegos**, lalu pilih folder berisi game di pemilih folder Xbox. Eden menyimpan izin folder yang diberikan Windows dan membaca game dari sana tanpa menyalin dump ke `LocalState`. Folder harus tetap tersedia dan diizinkan saat Eden mengaksesnya.
+
+> Pemilih folder hanya memberi akses ke lokasi yang ditampilkan dan diizinkan Windows. Folder SMB/jaringan hanya bisa dipakai jika tersedia di pemilih tersebut dan Xbox dapat membukanya; visibilitas jaringan, autentikasi, dan perilaku pada perangkat Xbox belum diverifikasi. Eden tidak dapat melewati sandbox Windows untuk membuka sembarang folder privat aplikasi atau lokasi yang tidak diberikan oleh sistem. Jika lokasi eksternal tidak muncul, gunakan `LocalState/games/` melalui Device Portal.
+
+Pencarian eksternal mengenali `.nsp`, `.xci`, dan `.nro`, hingga 10.000 entri. Batas kedalaman menghitung folder yang dipilih sebagai tingkat pertama; simpan file di folder itu atau sampai empat subfolder di bawahnya.
+
+Setelah impor atau unggahan selesai, periksa status keys dan jumlah file firmware di **Configuración → Gestor de archivos**. Jika game belum muncul, kembali ke pustaka lalu tekan **Menu** untuk memperbarui daftar.
 
 ### Catatan hukum dan keamanan
 
@@ -80,7 +92,8 @@ Gunakan hanya `prod.keys`, `title.keys`, firmware, dan dump game yang kamu buat 
 ## Pembaruan dan bantuan
 
 - Pasang versi baru di atas versi lama menggunakan sertifikat rilis yang sama. Jangan menghapus Eden lebih dulu; data aplikasi biasanya dipertahankan saat pembaruan.
-- Jika game belum muncul, tekan **Menu** untuk memperbarui pustaka, pastikan file ada di `LocalState/games/`, atau tambahkan folder USB dari menu Gestor de archivos.
+- Jika game belum muncul, tekan **Menu** untuk memperbarui pustaka. Untuk penyimpanan internal, pastikan file ada di `LocalState/games/`; untuk eksternal, pastikan drive/lokasi masih tersedia dan tambahkan lagi lewat **Configuración → Gestor de archivos → Agregar carpeta de juegos**.
+- Jika game berada lebih dari empat subfolder di bawah folder yang dipilih atau hasil pemindaian melebihi 10.000 entri, pilih folder yang lebih dekat ke game atau kurangi isi folder yang dipindai.
 - Jika keys belum terbaca, pastikan nama file tepat `prod.keys` dan berada langsung di `LocalState/eden/keys/`, lalu jalankan ulang Eden.
 - Jika firmware belum terbaca, pastikan ZIP diekstrak oleh browser Device Portal dan file `.nca` berada langsung di `LocalState/eden/nand/system/Contents/registered/`.
 - Untuk catatan teknis pengembangan, lihat [README developer di repository](https://github.com/temamumtaza/eden-xbox/blob/xbox/README-developer.md). Lisensi: [GPL-3.0-or-later](LICENSE.txt).

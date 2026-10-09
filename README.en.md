@@ -34,7 +34,7 @@ If installation reports an untrusted package, make sure you installed the certif
 
 ## Set up your own keys, firmware, and games
 
-Use the Device Portal browser to place files in Eden's storage. In **File Explorer**, open **User Folders → LocalAppData → Eden package → LocalState**. The package name can vary by version; select the installed Eden package. These are the data folders Eden reads, not temporary staging folders.
+Use the Device Portal browser to place files in Eden's storage. In **File Explorer**, open **User Folders → LocalAppData → Eden package → LocalState**. The package name can vary by version; select the installed Eden package. These are the data folders Eden reads, not temporary staging folders. You can also import keys and firmware through **Configuración → Gestor de archivos** when the Xbox folder picker can access their source folder.
 
 Inside `LocalState`, use **New Folder** to create any missing folders until the layout looks like this:
 
@@ -56,7 +56,10 @@ LocalState/
 
 ### Add your keys
 
-Upload your `prod.keys` and, if available, `title.keys` into `LocalState/eden/keys/` using **File Explorer → Upload**. `prod.keys` is required; `title.keys` is optional. Eden reads keys from this location when it starts.
+There are two ways to add them:
+
+- In Eden, open **Configuración → Gestor de archivos → Importar claves de tu consola**, then select a folder with `prod.keys` directly inside it. You can place the optional `title.keys` in the same folder. Eden copies and reloads the keys after a successful import.
+- Or upload `prod.keys` and, if available, `title.keys` to `LocalState/eden/keys/` using **File Explorer → Upload**. Eden reads keys from this location when it starts.
 
 ### Add a firmware ZIP
 
@@ -67,11 +70,20 @@ Upload your `prod.keys` and, if available, `title.keys` into `LocalState/eden/ke
 
 The Device Portal File Explorer extracts the ZIP during upload; Eden reads the extracted files from the standard folder above. Microsoft documents the upload extraction option in the [Device Portal API reference](https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/device-portal-api-core).
 
+Alternatively, extract the ZIP on your computer first. In Eden, choose **Configuración → Gestor de archivos → Importar firmware de tu consola** and select the folder containing the extracted `.nca` files directly. A valid key set is required before importing firmware.
+
 ### Add games
 
-Upload your own game dumps to `LocalState/games/`, or connect a USB drive that contains them. For games on USB, choose **Settings (Configuración) → File Manager (Gestor de archivos) → Add game folder (Agregar carpeta de juegos)**.
+Choose internal or external storage:
 
-After all uploads finish, press **B** from Eden's library to exit, then launch Eden again from Dev Home. In **Configuración → Gestor de archivos**, check that it shows **Claves listas** and a firmware file count.
+- **Internal storage:** upload your own game dumps to `LocalState/games/` using Device Portal File Explorer.
+- **USB or network folder:** connect the USB drive, or make the network location available to Xbox. In Eden, open **Configuración → Gestor de archivos → Agregar carpeta de juegos**, then choose the game folder in the Xbox system folder picker. Eden saves the permission Windows grants and reads games from that location without copying the dumps into `LocalState`. Keep the drive or location available while Eden uses it.
+
+> The folder picker only grants access to locations Windows displays and permits. An SMB/network folder can be used only if it appears in that picker and Xbox can open it; network visibility, authentication, and behavior on Xbox hardware have not been verified. Eden cannot bypass the Windows sandbox to open arbitrary private app folders or locations the system has not granted. If an external location does not appear, use `LocalState/games/` through Device Portal.
+
+External scans recognize `.nsp`, `.xci`, and `.nro`, up to 10,000 entries. The depth limit counts the selected folder as the first level; keep game files in that folder or up to four subfolders below it.
+
+After importing or uploading, check the key status and firmware file count in **Configuración → Gestor de archivos**. If a game is missing, return to the library and press **Menu** to refresh the list.
 
 ### Legal and security notice
 
@@ -80,7 +92,8 @@ Only use `prod.keys`, `title.keys`, firmware, and game dumps made from a Switch 
 ## Updates and help
 
 - Install a newer version over the existing one with the same release certificate. Do not uninstall Eden first; app data is normally preserved during an update.
-- If a game is missing, press **Menu** to refresh the library, check `LocalState/games/`, or add the USB folder from Eden's File Manager.
+- If a game is missing, press **Menu** to refresh the library. For internal storage, check `LocalState/games/`; for external storage, make sure the drive/location is still available and add it again through **Configuración → Gestor de archivos → Agregar carpeta de juegos**.
+- If a game is more than four subfolders below the selected folder or the scan exceeds 10,000 entries, choose a folder closer to the game or reduce the number of items being scanned.
 - If keys are not detected, check that the filename is exactly `prod.keys` and that it is directly inside `LocalState/eden/keys/`, then relaunch Eden.
 - If firmware is not detected, extract the ZIP in the Device Portal browser and make sure `.nca` files are directly inside `LocalState/eden/nand/system/Contents/registered/`.
 - For engineering details, see the [developer README in the repository](https://github.com/temamumtaza/eden-xbox/blob/xbox/README-developer.md). License: [GPL-3.0-or-later](LICENSE.txt).

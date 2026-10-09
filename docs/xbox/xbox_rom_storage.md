@@ -262,3 +262,37 @@ al almacenamiento interno del núcleo, sin incluirlos en el paquete distribuible
 El gestor muestra estado, permite quitar fuentes de juegos sin borrar dumps y
 detiene metadatos antes de sustituir claves. Diseño, copia por broker, publicación
 recuperable, cancelación y gate en [xbox_frontend.md](xbox_frontend.md).
+
+## Acceso UNC/SMB y límites del picker (10 oct 2026)
+
+La VFS ya admite fuentes entregadas por `FolderPicker` y conservadas en
+`FutureAccessList`. Se añadió `privateNetworkClientServer` al manifiesto, junto a
+`internetClient`, como permiso necesario para ubicaciones UNC. Microsoft documenta
+ambas capacidades para UNC; el flujo de picker concede acceso solo a la ubicación
+que la persona selecciona. `broadFileSystemAccess` no es una alternativa en Xbox.
+Fuentes: [permisos de acceso a archivos](https://learn.microsoft.com/en-us/windows/apps/develop/files/file-access-permissions?redirectedfrom=MSDN),
+[capacidades](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations),
+[pickers](https://learn.microsoft.com/en-us/windows/uwp/files/quickstart-using-file-and-folder-pickers).
+
+El manifiesto no monta shares, no añade un campo para escribir rutas UNC y no pide
+credenciales SMB. Si el picker de Xbox no presenta un share —o Windows deniega su
+autenticación— la app no puede descubrirlo ni saltarse el sandbox. Tampoco obtiene
+acceso a directorios privados de otras apps. Hasta superar un gate físico de Series,
+describir la función como acceso a carpetas seleccionables/autorizadas por el picker,
+no como acceso a cualquier ruta de Xbox.
+
+Auditoría de `StorageDirectory`: `GetFile()` sigue heredado de `VfsDirectory` y
+construye su respuesta enumerando todos los archivos hermanos. Si la enumeración de
+una carpeta falla, el manejo de errores devuelve lo acumulado hasta ese punto y una
+búsqueda de un archivo concreto podría no encontrarlo; además, esta ruta hace trabajo
+extra en una carpeta SMB. El comportamiento ante un elemento individual sin permiso aún
+no está reproducido. También se omite silenciosamente el contenido que supere la
+profundidad de escaneo, sin activar el aviso de límite de la interfaz. Son riesgos
+que deben resolverse antes de prometer fiabilidad en carpetas SMB grandes o con permisos
+mixtos; aún no hay gate de desconexión/timeout de red.
+
+Gate pendiente: en Series, seleccionar desde la UI un share UNC y un USB, confirmar
+que ambos aparecen en la biblioteca, reiniciar Eden y reabrirlos desde el token,
+leer un archivo grande sin copiarlo a LocalState, y medir desconexión/reconexión. La
+capacidad del manifiesto pasó solo parseo XML local; no demuestra que el picker de
+Xbox liste el share ni que el dispositivo permita autenticarse.
