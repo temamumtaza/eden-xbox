@@ -28,6 +28,13 @@ each package. Keep the signing identity stable so users can update without unins
 their app data. The public `.cer` is included in the bundle; the private signing key and password
 remain in GitHub Actions Secrets.
 
+The draft workflow needs repository `contents:write` permission to call the Releases API. In the
+current repository, the `GITHUB_TOKEN` release request returned HTTP 403 even though the job asks
+for that scope, so the v0.3.0-preview.2 draft was created with an authenticated maintainer `gh`
+session after the workflow had verified the bundle. Future workflow runs can use an `XBOX_RELEASE_TOKEN`
+repository secret scoped to this repository with `contents:write`, or an administrator can review
+the repository's Actions token policy. Never put a personal token in the workflow file or logs.
+
 ## User-facing package contents
 
 The single ZIP asset is named `EdenXbox-<tag>.zip` and contains:

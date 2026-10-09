@@ -176,7 +176,7 @@ jobs:
 
       - name: Create a draft prerelease for maintainer review
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.XBOX_RELEASE_TOKEN || github.token }}
           REPOSITORY: ${{ github.repository }}
           TAG_NAME: ${{ inputs.tag_name }}
           PACKAGE_SOURCE_SHA: ${{ steps.metadata.outputs.package_source_sha }}
