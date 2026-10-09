@@ -8,6 +8,10 @@
 
 int main() {
     namespace fs = std::filesystem;
+    assert(EdenXbox::IsHomebrewNroPath("game.nro"));
+    assert(EdenXbox::IsHomebrewNroPath("game.NRO"));
+    assert(EdenXbox::IsHomebrewNroPath("game.NrO"));
+    assert(!EdenXbox::IsHomebrewNroPath("game.nsp"));
     const auto root = fs::temp_directory_path() /
         ("eden-library-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directory(root);

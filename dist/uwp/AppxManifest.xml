@@ -58,6 +58,52 @@
           Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#1C1C1C" />
       </uap:VisualElements>
+      <!-- These types are read directly from UNC folders and removable volumes. The
+           declarations are required by the UWP file-access model; they do not make
+           arbitrary Xbox app-private folders accessible. -->
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="edenstorage">
+            <uap:SupportedFileTypes>
+              <!-- SupportedFileTypes are case-sensitive; mirror the scanner's
+                   case-insensitive extension handling for common dump types. -->
+              <uap:FileType>.nsp</uap:FileType>
+              <uap:FileType>.nsP</uap:FileType>
+              <uap:FileType>.nSp</uap:FileType>
+              <uap:FileType>.nSP</uap:FileType>
+              <uap:FileType>.Nsp</uap:FileType>
+              <uap:FileType>.NsP</uap:FileType>
+              <uap:FileType>.NSp</uap:FileType>
+              <uap:FileType>.NSP</uap:FileType>
+              <uap:FileType>.xci</uap:FileType>
+              <uap:FileType>.xcI</uap:FileType>
+              <uap:FileType>.xCi</uap:FileType>
+              <uap:FileType>.xCI</uap:FileType>
+              <uap:FileType>.Xci</uap:FileType>
+              <uap:FileType>.XcI</uap:FileType>
+              <uap:FileType>.XCi</uap:FileType>
+              <uap:FileType>.XCI</uap:FileType>
+              <uap:FileType>.nro</uap:FileType>
+              <uap:FileType>.nrO</uap:FileType>
+              <uap:FileType>.nRo</uap:FileType>
+              <uap:FileType>.nRO</uap:FileType>
+              <uap:FileType>.Nro</uap:FileType>
+              <uap:FileType>.NrO</uap:FileType>
+              <uap:FileType>.NRo</uap:FileType>
+              <uap:FileType>.NRO</uap:FileType>
+              <uap:FileType>.keys</uap:FileType>
+              <uap:FileType>.nca</uap:FileType>
+              <uap:FileType>.ncA</uap:FileType>
+              <uap:FileType>.nCa</uap:FileType>
+              <uap:FileType>.nCA</uap:FileType>
+              <uap:FileType>.Nca</uap:FileType>
+              <uap:FileType>.NcA</uap:FileType>
+              <uap:FileType>.NCa</uap:FileType>
+              <uap:FileType>.NCA</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
     </Application>
   </Applications>
 
@@ -68,9 +114,11 @@
     <Capability Name="codeGeneration" />
     <!-- core/network_interface + the NS services touch sockets on startup. -->
     <Capability Name="internetClient" />
-    <!-- Local SMB/UNC shares are not covered by internetClient; the user still chooses the folder
-         through FolderPicker and its FutureAccessList grant. -->
+    <!-- Local SMB/UNC shares also require private-network access. Folder/path resolution and
+         Windows share authentication remain separate checks at runtime. -->
     <Capability Name="privateNetworkClientServer" />
+    <!-- Lets the app enumerate/read supported file types from attached removable volumes. -->
+    <uap:Capability Name="removableStorage" />
     <!-- PC Nintendo Pro USB transport; joystick usage is allowed by UWP HID. -->
     <DeviceCapability Name="humanInterfaceDevice" />
   </Capabilities>

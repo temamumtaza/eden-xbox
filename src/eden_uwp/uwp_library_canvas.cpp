@@ -120,7 +120,7 @@ public:
             Text(L"Buscando juegos en tu carpeta...", 64, 266, 24, 0x9ba9ba, 1000);
         } else if (scan.entries.empty()) {
             Text(L"Tu proxima aventura empieza aqui", 64, 192, 40, 0xf4f7fa, 1100, 70, true);
-            Text(L"Abre Configuracion para importar tus claves, firmware y agregar juegos de USB.", 64, 278, 24, 0x9ba9ba, 1120);
+            Text(L"Abre Configuracion para importar tus claves, firmware y agregar una carpeta externa.", 64, 278, 24, 0x9ba9ba, 1120);
         } else {
             const auto& game = scan.entries[selected];
             Cover(game, 64, 148, 220);
@@ -211,6 +211,8 @@ public:
         }
         if (panel.keyboard.open) DrawKeyboard(panel.keyboard);
         if (configuration.open && !settings) DrawConfiguration(configuration);
+        if (configuration.path_entry_open) DrawFolderPathEntry(configuration);
+        if (configuration.browser_open) DrawFolderBrowser(configuration);
         winrt::check_hresult(target->EndDraw());
         winrt::check_hresult(swapchain->Present(1, 0));
     }
@@ -387,6 +389,98 @@ private:
                 line(16 + 11 * d.x, 16 + 11 * d.y, 16 + 15 * d.x, 16 + 15 * d.y);
         }
     }
+    void DrawFolderPathEntry(const ConfigurationPanel& panel) {
+        brush->SetColor(D2D1::ColorF(0, 0, 0, 0.88f));
+        target->FillRectangle(D2D1::RectF(0, 0, 1280, 720), brush.Get());
+        Round(60, 58, 1160, 604, 24, 0x111923);
+        const auto purpose = panel.path_purpose == FolderPathPurpose::Games ? L"juegos" :
+                             panel.path_purpose == FolderPathPurpose::Keys ? L"claves" : L"firmware";
+        Text(L"Agregar carpeta externa", 108, 78, 30, 0xf4f7fa, 900, 42, true);
+        Text(std::wstring{L"Escribe una ruta absoluta para "} + purpose + L".",
+             110, 130, 19, 0x9ba9ba, 1050, 30);
+        Round(108, 172, 1064, 54, 10, panel.path_resolving ? 0x1c2b38 : 0x202b39);
+        std::wstring visible;
+        if (panel.path_text.empty()) visible = L"D:\\Juegos  o  \\\\servidor\\carpeta";
+        else {
+            const size_t cursor = std::min(panel.path_cursor, panel.path_text.size());
+            const size_t first = cursor > 56 ? cursor - 56 : 0;
+            visible = panel.path_text.substr(first, 80);
+            visible.insert(std::min(cursor - first, visible.size()), L"|");
+        }
+        Text(visible, 128, 182, 22, panel.path_text.empty() ? 0x738194 : 0xf4f7fa, 1020, 36);
+        Text(panel.path_resolving ? L"Comprobando acceso con Windows..." :
+             L"El acceso depende de los permisos de Windows y del sandbox de la app. No se guardan credenciales.",
+             110, 236, 16, 0x9ba9ba, 1060, 34, false, true);
+        for (size_t row = 0; row < FolderPathKeyboardRows; ++row) {
+            for (size_t column = 0; column < FolderPathKeyboardColumns; ++column) {
+                const auto label = FolderPathKeyboardDisplayKey(
+                    row * FolderPathKeyboardColumns + column, panel.path_symbols, panel.path_uppercase);
+                if (label.empty()) continue;
+                const float x = FolderPathKeyX + column * (FolderPathKeyWidth + FolderPathKeyGapX);
+                const float y = FolderPathKeyY + row * (FolderPathKeyHeight + FolderPathKeyGapY);
+                const bool active = panel.path_key == row * FolderPathKeyboardColumns + column;
+                Round(x, y, FolderPathKeyWidth, FolderPathKeyHeight, 8,
+                      active ? (panel.path_resolving ? 0x3c4650 : 0x304b49) : 0x202b39);
+                Text(std::wstring{label}, x + 3, y + 2, label.size() > 1 ? 15.0f : 20.0f,
+                     active ? 0x77e3bd : 0xf4f7fa, FolderPathKeyWidth - 6, FolderPathKeyHeight - 4,
+                     active, false, true);
+            }
+        }
+        if (!panel.path_error.empty())
+            Text(panel.path_error, 110, 526, 16, 0xff9b91, 1050, 54, false, true);
+        ControlPrompt(Navigation::Play, L"Agregar ruta", 110, 612, 190,
+                      panel.path_resolving ? 0x738194 : 0x9ba9ba);
+        Text(L"Teclado: escribir · Retroceso · Enter", 472, 616, 15, 0x9ba9ba, 340, 28, false, false, true);
+        ControlPrompt(Navigation::Back, L"Cancelar", 1010, 612, 120);
+    }
+    void DrawFolderBrowser(const ConfigurationPanel& panel) {
+        brush->SetColor(D2D1::ColorF(0, 0, 0, 0.88f));
+        target->FillRectangle(D2D1::RectF(0, 0, 1280, 720), brush.Get());
+        Round(60, 58, 1160, 604, 24, 0x111923);
+        const auto purpose = panel.path_purpose == FolderPathPurpose::Games ? L"juegos" :
+                             panel.path_purpose == FolderPathPurpose::Keys ? L"claves" : L"firmware";
+        Text(std::wstring{L"Buscar carpeta para "} + purpose, 108, 76, 30, 0xf4f7fa, 1000, 42, true);
+        const std::wstring location = panel.browser_location.empty() ?
+            L"Ubicaciones disponibles para Eden" : panel.browser_location;
+        Text(location, 110, 125, 17, 0x9ba9ba, 1060, 34, false, true);
+        Text(L"Solo se muestran carpetas que Windows expone a Eden; las rutas privadas siguen protegidas.",
+             110, 151, 14, 0x738194, 1060, 24, false, true);
+
+        if (panel.browser_loading) {
+            Text(panel.browser_at_roots ? L"Cargando ubicaciones..." : L"Buscando subcarpetas...",
+                 110, 310, 23, 0x9ba9ba, 1060, 40, false, true);
+        } else {
+            size_t row = 0;
+            auto draw_row = [&](size_t index, const std::wstring& label, const std::wstring& detail = {}) {
+                const float y = FolderBrowserListTop + static_cast<float>(index) * FolderBrowserRowStride;
+                const bool active = panel.browser_selected == index;
+                Round(FolderBrowserListX, y, FolderBrowserListRight - FolderBrowserListX,
+                      FolderBrowserRowHeight, 8, active ? 0x304b49 : 0x202b39);
+                if (active) Round(112, y + 8, 3, 20, 1.5f, 0x77e3bd);
+                Text(label, 130, y + (detail.empty() ? 5.0f : 2.0f),
+                     detail.empty() ? 18.0f : 16.0f, 0xf4f7fa, 1024, 28, active);
+                if (!detail.empty()) Text(detail, 132, y + 20, 12, 0x9ba9ba, 1010, 18);
+            };
+            if (!panel.browser_at_roots) {
+                draw_row(row++, std::wstring{L"Usar esta carpeta para "} + purpose);
+                draw_row(row++, L"Subir un nivel / volver a ubicaciones");
+            }
+            for (const auto& entry : panel.browser_entries) draw_row(row++, entry.name);
+            if (row == 0) Text(L"No hay ubicaciones disponibles para explorar.", 110, 315, 20, 0x9ba9ba, 1060, 40);
+            else if (!panel.browser_at_roots && panel.browser_entries.empty())
+                Text(L"Esta carpeta no contiene subcarpetas.", 130, 274, 16, 0x9ba9ba, 1020, 30);
+        }
+        if (!panel.browser_error.empty())
+            Text(panel.browser_error, 110, 568, 14, 0xff9b91, 1060, 30, false, true);
+        else if (!panel.browser_loading)
+            Text(L"Pagina " + std::to_wstring(panel.browser_page / FolderBrowserPageSize + 1),
+                 110, 568, 14, 0x738194, 240, 26);
+        ControlPrompt(Navigation::Play, L"Abrir / usar carpeta", 110, 612, 250,
+                      panel.browser_loading ? 0x738194 : 0x9ba9ba);
+        Text(L"← Anterior", 385, 616, 15, 0x9ba9ba, 120, 28, false, false, true);
+        Text(L"Siguiente →", 635, 616, 15, 0x9ba9ba, 140, 28, false, false, true);
+        ControlPrompt(Navigation::Back, L"Subir / cancelar", 1000, 612, 160);
+    }
     void DrawConfiguration(const ConfigurationPanel& panel) {
         Round(0, 0, 1280, 720, 0, 0x080d15);
         const auto layout = GetConfigurationLayout(panel);
@@ -404,7 +498,7 @@ private:
         if (panel.files) {
             Text(std::wstring{panel.status.keys_ready ? L"Claves listas" : L"Claves pendientes"} +
                  L"  ·  Firmware: " + std::to_wstring(panel.status.firmware_files) + L" archivos", 130, 168, 18, 0x77e3bd, 950);
-            Text(L"Juegos en USB. Claves y firmware se importan al almacenamiento interno.", 130, 201, 16, 0x9ba9ba, 950);
+            Text(L"Juegos desde una carpeta externa. Claves y firmware se importan al almacenamiento interno.", 130, 201, 16, 0x9ba9ba, 950);
         } else Text(L"Todo listo para jugar, a tu manera", 246, 198, 17, 0x9ba9ba, 790);
         const auto count = ConfigurationRowCount(panel);
         const auto first = ConfigurationFirstRow(panel);
@@ -414,16 +508,19 @@ private:
             Round(layout.x, y, layout.width, layout.row_height, 12, active ? 0x304b49 : 0x151f2c);
             if (active) Round(layout.x, y + 16, 3, layout.row_height - 32, 1.5f, 0x77e3bd);
             const auto icon = !panel.files ? (i == 0 ? ConfigurationIcon::Folder : ConfigurationIcon::Controller) :
-                i == 0 ? ConfigurationIcon::Folder : i == 1 ? ConfigurationIcon::Key :
-                i == 2 ? ConfigurationIcon::Firmware : ConfigurationIcon::Remove;
+                i < 2 ? ConfigurationIcon::Folder : i < 4 ? ConfigurationIcon::Key :
+                i < 6 ? ConfigurationIcon::Firmware : ConfigurationIcon::Remove;
             const float icon_y = y + (layout.row_height - 32) / 2;
             DrawConfigurationIcon(icon, layout.x + 20, icon_y, active ? 0x77e3bd : 0x9ba9ba);
             std::wstring title;
             if (!panel.files) title = i == 0 ? L"Gestor de archivos" : L"Mandos y teclado";
-            else if (i == 0) title = L"Agregar carpeta de juegos";
-            else if (i == 1) title = L"Importar claves de tu consola";
-            else if (i == 2) title = L"Importar firmware de tu consola";
-            else title = L"Quitar carpeta: " + panel.status.sources[i - 3].name;
+            else if (i == 0) title = L"Buscar carpeta de juegos";
+            else if (i == 1) title = L"Escribir ruta de juegos";
+            else if (i == 2) title = L"Importar claves de tu consola";
+            else if (i == 3) title = L"Escribir ruta de claves";
+            else if (i == 4) title = L"Importar firmware de tu consola";
+            else if (i == 5) title = L"Escribir ruta de firmware";
+            else title = L"Quitar carpeta: " + panel.status.sources[i - 6].name;
             Text(title, layout.x + 72, y + (panel.files ? 10.0f : 13.0f), panel.files ? 20.0f : 22.0f,
                  0xf4f7fa, layout.width - 135, 32, !panel.files);
             if (!panel.files) {

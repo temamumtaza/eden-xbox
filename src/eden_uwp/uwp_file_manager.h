@@ -5,27 +5,52 @@
 #include <functional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <winrt/Windows.Storage.h>
+#include "eden_uwp/folder_path.h"
 
 namespace EdenXbox {
 struct GameFolderSource { std::string token; std::wstring name; };
+struct FolderBrowserEntry {
+    std::wstring name;
+    winrt::Windows::Storage::StorageFolder folder{nullptr};
+};
 struct FileSetupStatus {
     bool keys_ready{};
     unsigned firmware_files{};
     std::vector<GameFolderSource> sources;
 };
+enum class FolderPathPurpose : unsigned { Games, Keys, Firmware };
 struct ConfigurationPanel {
     bool open{};
     bool files{};
     bool busy{};
+    bool path_entry_open{};
+    bool path_resolving{};
+    bool path_symbols{};
+    bool path_uppercase{};
+    bool browser_open{};
+    bool browser_loading{};
+    bool browser_at_roots{};
     size_t selected{};
+    size_t path_cursor{};
+    size_t path_key{};
+    size_t browser_selected{};
+    size_t browser_page{};
+    bool browser_has_more{};
+    std::vector<FolderBrowserEntry> browser_entries;
+    std::wstring browser_location;
+    std::wstring browser_error;
+    FolderPathPurpose path_purpose{FolderPathPurpose::Games};
+    std::wstring path_text;
+    std::wstring path_error;
     FileSetupStatus status;
     std::wstring notice;
     unsigned completed{}, total{};
 };
 inline size_t ConfigurationRowCount(const ConfigurationPanel& panel) {
-    return panel.files ? 3 + panel.status.sources.size() : 2;
+    return panel.files ? 6 + panel.status.sources.size() : 2;
 }
 inline size_t ConfigurationFirstRow(const ConfigurationPanel& panel) {
     return (panel.selected / 5) * 5;

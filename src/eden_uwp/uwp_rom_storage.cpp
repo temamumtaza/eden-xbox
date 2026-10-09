@@ -1,13 +1,18 @@
 // SPDX-FileCopyrightText: Copyright 2026 JulianDr14
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "eden_uwp/uwp_rom_storage.h"
+#include "eden_uwp/uwp_async.h"
 #include "eden_uwp/storage_path.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <climits>
 #include <cstring>
 #include <mutex>
+#include <set>
+#include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <windows.h>
 #include <objbase.h>
@@ -50,6 +55,22 @@ void AddError(LibraryScan& scan, std::string_view error) {
         if (!scan.error.empty()) scan.error += " | ";
         scan.error += error;
     }
+}
+struct WindowsPathLess {
+    bool operator()(const std::wstring& a, const std::wstring& b) const {
+        if (a.size() <= INT_MAX && b.size() <= INT_MAX) {
+            const int order = CompareStringOrdinal(a.data(), static_cast<int>(a.size()),
+                                                   b.data(), static_cast<int>(b.size()), TRUE);
+            if (order == CSTR_LESS_THAN) return true;
+            if (order == CSTR_EQUAL || order == CSTR_GREATER_THAN) return false;
+        }
+        return a < b;
+    }
+};
+bool SameWindowsPath(std::wstring_view a, std::wstring_view b) {
+    if (a.size() != b.size() || a.size() > INT_MAX) return false;
+    return CompareStringOrdinal(a.data(), static_cast<int>(a.size()),
+                                b.data(), static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
 }
 StorageFolder ResolveFolder(const StoragePath& path, std::string_view relative) {
     auto folder = StorageApplicationPermissions::FutureAccessList().GetFolderAsync(
@@ -206,6 +227,11 @@ public:
             return {};
         }
     }
+    FileSys::VirtualFile GetFile(std::string_view name) const override {
+        // VfsDirectory::GetFile enumerates every sibling. Resolve the requested
+        // item through WinRT so large or remote folders need only one lookup.
+        return GetFileRelative(name);
+    }
     FileSys::VirtualDir GetDirectoryRelative(std::string_view relative) const override {
         if (!ValidStorageRelative(relative)) return {};
         try {
@@ -225,27 +251,57 @@ public:
         std::vector<FileSys::VirtualFile> result;
         try {
             EnsureStorageApartment();
-            for (unsigned start = 0; start < MaxEntries; start += PageSize) {
-                auto files = folder.GetFilesAsync(Search::CommonFileQuery::DefaultQuery, start, PageSize).get();
-                for (const auto& file : files)
+            unsigned start = 0;
+            while (start < MaxEntries) {
+                const auto remaining = MaxEntries - start;
+                const auto requested = remaining <= PageSize ? remaining + 1 : PageSize;
+                auto files = folder.GetFilesAsync(Search::CommonFileQuery::DefaultQuery, start, requested).get();
+                const auto append_count = std::min<unsigned>(files.Size(), remaining);
+                for (unsigned i = 0; i < append_count; ++i) {
+                    const auto& file = files.GetAt(i);
                     result.push_back(std::make_shared<StorageGameFile>(file, MakeDirectory(folder, path),
                                       path + "/" + winrt::to_string(file.Name())));
-                if (files.Size() < PageSize) break;
+                }
+                if (files.Size() > remaining) {
+                    LOG_WARNING(Frontend, "ROM storage: file enumeration truncated at {} entries path={}",
+                                MaxEntries, path);
+                    break;
+                }
+                start += files.Size();
+                if (files.Size() < requested) break;
             }
-        } catch (const winrt::hresult_error&) {}
+        } catch (const winrt::hresult_error& e) {
+            LOG_WARNING(Frontend, "ROM storage: file enumeration failed path={} error={}",
+                        path, winrt::to_string(e.message()));
+        }
         return result;
     }
     std::vector<FileSys::VirtualDir> GetSubdirectories() const override {
         std::vector<FileSys::VirtualDir> result;
         try {
             EnsureStorageApartment();
-            for (unsigned start = 0; start < MaxEntries; start += PageSize) {
-                auto folders = folder.GetFoldersAsync(Search::CommonFolderQuery::DefaultQuery, start, PageSize).get();
-                for (const auto& child : folders)
+            unsigned start = 0;
+            while (start < MaxEntries) {
+                const auto remaining = MaxEntries - start;
+                const auto requested = remaining <= PageSize ? remaining + 1 : PageSize;
+                auto folders = folder.GetFoldersAsync(Search::CommonFolderQuery::DefaultQuery, start, requested).get();
+                const auto append_count = std::min<unsigned>(folders.Size(), remaining);
+                for (unsigned i = 0; i < append_count; ++i) {
+                    const auto& child = folders.GetAt(i);
                     result.push_back(MakeDirectory(child, path + "/" + winrt::to_string(child.Name())));
-                if (folders.Size() < PageSize) break;
+                }
+                if (folders.Size() > remaining) {
+                    LOG_WARNING(Frontend, "ROM storage: directory enumeration truncated at {} entries path={}",
+                                MaxEntries, path);
+                    break;
+                }
+                start += folders.Size();
+                if (folders.Size() < requested) break;
             }
-        } catch (const winrt::hresult_error&) {}
+        } catch (const winrt::hresult_error& e) {
+            LOG_WARNING(Frontend, "ROM storage: directory enumeration failed path={} error={}",
+                        path, winrt::to_string(e.message()));
+        }
         return result;
     }
 private:
@@ -309,9 +365,10 @@ public:
 
 void ScanFolder(StorageFolder folder, const std::string& token, const std::wstring& source,
                 std::string relative, unsigned depth, unsigned& visited,
-                LibraryScan& scan, std::stop_token stop) {
+                LibraryScan& scan, std::stop_token stop,
+                std::set<std::wstring, WindowsPathLess>& seen_paths) {
     for (unsigned start = 0; !stop.stop_requested(); start += PageSize) {
-        auto items = folder.GetItemsAsync(start, PageSize).get();
+        auto items = AwaitStorageOperation(folder.GetItemsAsync(start, PageSize), stop);
         for (const auto& item : items) {
             if (stop.stop_requested()) return;
             if (++visited > MaxEntries) { scan.limited = true; return; }
@@ -320,41 +377,58 @@ void ScanFolder(StorageFolder folder, const std::string& token, const std::wstri
             if (!ValidStorageRelative(child)) continue;
             if (item.IsOfType(StorageItemTypes::Folder)) {
                 if (depth < 4) {
-                    try { ScanFolder(item.as<StorageFolder>(), token, source, child, depth + 1, visited, scan, stop); }
-                    catch (const winrt::hresult_error& e) { AddError(scan, ErrorText(e)); }
+                    try { ScanFolder(item.as<StorageFolder>(), token, source, child, depth + 1,
+                                     visited, scan, stop, seen_paths); }
+                    catch (const winrt::hresult_error& e) {
+                        if (!stop.stop_requested()) AddError(scan, ErrorText(e));
+                    }
+                } else {
+                    scan.limited = true;
                 }
             } else {
                 const auto p = std::filesystem::path{winrt::to_hstring(child).c_str()};
                 auto ext = p.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 if (ext != ".nsp" && ext != ".xci" && ext != ".nro") continue;
+                const std::wstring physical_path{item.Path()};
+                if (!physical_path.empty() && !seen_paths.insert(physical_path).second) continue;
                 LibraryEntry entry{p, p.stem().wstring()};
                 entry.launch_path = MakeStoragePath(token, child);
                 entry.source_name = source;
                 scan.entries.push_back(std::move(entry));
             }
-            if (scan.limited) return;
+            // A depth-limited child marks incomplete results but does not stop
+            // scanning the remaining siblings. The visit cap does stop the walk.
+            if (visited > MaxEntries) return;
         }
         if (items.Size() < PageSize) break;
     }
 }
 } // namespace
 
-std::string RememberGameFolder(const StorageFolder& folder) {
+std::string RememberGameFolder(const StorageFolder& folder, std::stop_token stop) {
     EnsureStorageApartment();
     auto list = StorageApplicationPermissions::FutureAccessList();
     unsigned count = 0;
     std::string token;
     const auto path = folder.Path();
+    const std::wstring path_text{path.c_str()};
     for (const auto& entry : list.Entries()) {
+        if (stop.stop_requested()) throw std::runtime_error("Penambahan folder dibatalkan.");
         const auto existing = winrt::to_string(entry.Token);
         if (!existing.starts_with("eden-games-")) continue;
         ++count;
         // Reauthorizing the same path updates its token rather than duplicating games.
+        if (!path_text.empty() && SameWindowsPath(entry.Metadata.c_str(), path_text)) {
+            token = existing;
+            continue;
+        }
         try {
-            if (!path.empty() && list.GetFolderAsync(entry.Token).get().Path() == path) token = existing;
+            const auto existing_folder = AwaitStorageOperation(list.GetFolderAsync(entry.Token), stop);
+            const auto existing_path = existing_folder.Path();
+            if (!path_text.empty() && SameWindowsPath(existing_path.c_str(), path_text)) token = existing;
         } catch (const winrt::hresult_error&) {
-            if (!path.empty() && entry.Metadata == path) token = existing;
+            if (stop.stop_requested()) throw;
         }
     }
     if (token.empty()) {
@@ -366,14 +440,17 @@ std::string RememberGameFolder(const StorageFolder& folder) {
         constexpr char hex[] = "0123456789abcdef";
         for (size_t i = 0; i < sizeof(guid); ++i) { token += hex[bytes[i] >> 4]; token += hex[bytes[i] & 15]; }
     }
+    if (stop.stop_requested()) throw std::runtime_error("Penambahan folder dibatalkan.");
     list.AddOrReplace(winrt::to_hstring(token), folder, path);
     return token;
 }
 
-LibraryScan ScanExternalGameFolders(std::stop_token stop) {
+LibraryScan ScanExternalGameFolders(std::stop_token stop,
+                                    const std::vector<std::wstring>& internal_game_paths) {
     EnsureStorageApartment();
     LibraryScan result;
     unsigned visited = 0, sources = 0;
+    std::set<std::wstring, WindowsPathLess> seen_paths{internal_game_paths.begin(), internal_game_paths.end()};
     auto list = StorageApplicationPermissions::FutureAccessList();
     for (const auto& entry : list.Entries()) {
         if (stop.stop_requested()) break;
@@ -381,11 +458,15 @@ LibraryScan ScanExternalGameFolders(std::stop_token stop) {
         if (!token.starts_with("eden-games-")) continue;
         if (++sources > MaxSources) { result.limited = true; break; }
         try {
-            auto folder = list.GetFolderAsync(entry.Token).get();
-            ScanFolder(folder, token, std::wstring{folder.Name()}, "", 0, visited, result, stop);
-        } catch (const winrt::hresult_error& e) { AddError(result, ErrorText(e)); }
-        if (result.limited) break;
+            auto folder = AwaitStorageOperation(list.GetFolderAsync(entry.Token), stop);
+            ScanFolder(folder, token, std::wstring{folder.Name()}, "", 0, visited, result, stop, seen_paths);
+        } catch (const winrt::hresult_error& e) {
+            if (!stop.stop_requested()) AddError(result, ErrorText(e));
+        }
+        if (visited > MaxEntries) break;
     }
+    if (!result.error.empty())
+        LOG_WARNING(Frontend, "ROM storage: scan completed with errors: {}", result.error);
     return result;
 }
 
@@ -483,12 +564,13 @@ bool RunRomStorageGate(bool restore, const std::function<void(std::string)>& dia
         auto virtual_file = fs->OpenFile(path, FileSys::OpenMode::Read);
         require(bool(virtual_file), "token VFS open failed");
         verify(virtual_file, (u64{1} << 32) + 1, 64);
-        require(bool(virtual_file->GetContainingDirectory()->GetFile("fixture.bin")), "sibling open failed");
+        const auto sibling = virtual_file->GetContainingDirectory()->GetFile("fixture.bin");
+        require(sibling && sibling->GetFullPath() == path, "direct sibling lookup mismatch");
         require(!fs->OpenFile(path, FileSys::OpenMode::ReadWrite), "writable external open allowed");
         require(!fs->OpenFile(MakeStoragePath(token, "../fixture.bin"), FileSys::OpenMode::Read), "traversal allowed");
         require(!fs->OpenFile(MakeStoragePath("eden-games-missing", "fixture.bin"), FileSys::OpenMode::Read), "missing token opened");
         require(CheckExternalGame(path).empty(), "preflight failed");
-        const auto scan = ScanExternalGameFolders({});
+        const auto scan = ScanExternalGameFolders({}, {});
         unsigned catalog_entries = 0;
         bool nested_a = false, nested_b = false;
         for (const auto& entry : scan.entries) {

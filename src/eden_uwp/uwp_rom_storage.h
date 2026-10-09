@@ -6,6 +6,7 @@
 #include <functional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <winrt/Windows.Storage.h>
 #include "core/file_sys/vfs/vfs_types.h"
@@ -14,8 +15,10 @@
 namespace EdenXbox {
 // FutureAccessList is the persisted source catalog. Unavailable tokens remain
 // there so reconnecting a USB does not silently forget the user's library.
-std::string RememberGameFolder(const winrt::Windows::Storage::StorageFolder& folder);
-LibraryScan ScanExternalGameFolders(std::stop_token stop);
+std::string RememberGameFolder(const winrt::Windows::Storage::StorageFolder& folder,
+                              std::stop_token stop = {});
+LibraryScan ScanExternalGameFolders(std::stop_token stop,
+                                    const std::vector<std::wstring>& internal_game_paths);
 FileSys::VirtualFilesystem MakeUwpFilesystem();
 // Bounded preflight, run on an MTA worker before starting the guest. Reports
 // access/removal errors in the library instead of closing the application.

@@ -129,6 +129,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$SOURCE_SHA" != "$GUIDE_SHA" || "$PACKAGE_SOURCE_SHA" != "$GUIDE_SHA" ]]; then
+            echo 'The binary, package, and release guides must come from the same source revision. Rebuild the current Xbox source before creating this release.' >&2
+            exit 1
+          fi
           app_version="$APP_VERSION"
           bundle_root="${GITHUB_WORKSPACE}/EdenXbox-${TAG_NAME}"
           mkdir -p "$bundle_root"
@@ -151,11 +155,18 @@ jobs:
           follow \`README.en.md\` inside it. Game compatibility is
           still in development; one Xbox Series S smoke test of Wild West Crops was reported to work.
           The package contains no Nintendo keys, firmware, or games.
-          External game folders are limited to locations exposed and authorized by the Xbox system
-          picker. This package declares private-network access for local SMB shares, but SMB
-          discovery/authentication on Xbox has not been tested; it adds no UNC path entry or access
-          to private folders owned by other apps. The scanner is limited to 10,000 entries and four
-          nested folder levels.
+          Add external game folders with Eden's Xbox storage browser or by entering an absolute USB
+          drive or UNC path. The browser lists Eden's LocalFolder, removable volumes exposed by
+          Windows, and saved access grants; it cannot open arbitrary Xbox directories. UNC uses the
+          Windows storage API and the package's network/file-type
+          capabilities; USB enumeration uses RemovableDevices. Neither route is verified on Xbox
+          hardware. Eden has no SMB username/password prompt and does not save share credentials,
+          so SMB shares that require domain authentication are unsupported because the package
+          does not declare enterpriseAuthentication. Other SMB access still depends on Windows/Xbox
+          permissions. The app cannot read
+          private folders owned by other apps. File associations are access declarations; direct
+          file activation from another app is not implemented. Scans are limited to 10,000 entries
+          and four nested folder levels.
 
           ## Bahasa Indonesia
           Preview komunitas untuk Xbox Series X|S Developer Mode. Rilis ini ditandatangani dan divalidasi
@@ -165,10 +176,18 @@ jobs:
           ikuti \`README.md\` di dalamnya. Kompatibilitas game masih dalam
           pengembangan; satu uji coba Wild West Crops pada Xbox Series S dilaporkan berjalan.
           Paket ini tidak menyertakan keys, firmware, atau game Nintendo.
-          Folder game eksternal dibatasi pada lokasi yang ditampilkan dan diizinkan pemilih folder
-          Xbox. Paket ini mendeklarasikan izin jaringan privat untuk SMB lokal, tetapi pencarian
-          share dan autentikasinya di Xbox belum diuji; tidak ada input jalur UNC atau akses ke
-          folder privat aplikasi lain. Scanner dibatasi 10.000 entri dan empat subfolder bertingkat.
+          Tambahkan folder game eksternal melalui browser storage Eden di Xbox atau dengan mengetik
+          jalur absolut USB/UNC. Browser menampilkan LocalFolder Eden, removable volume yang
+          diekspos Windows, dan izin tersimpan; browser tidak dapat membuka sembarang direktori
+          Xbox. UNC memakai API storage dan kapabilitas jaringan/tipe berkas
+          Windows; enumerasi USB memakai RemovableDevices. Keduanya belum diverifikasi di Xbox.
+          Eden tidak menyediakan dialog username/password SMB dan tidak menyimpan kredensial share,
+          jadi share yang memerlukan autentikasi domain tidak didukung karena paket tidak
+          mendeklarasikan enterpriseAuthentication. Akses SMB lainnya tetap bergantung pada izin
+          Windows/Xbox. Aplikasi tidak
+          dapat membaca folder privat milik aplikasi lain. Asosiasi berkas hanya menjadi deklarasi
+          akses; aktivasi file langsung dari aplikasi lain belum dibuat. Scan dibatasi hingga
+          10.000 entri dan empat tingkat subfolder.
 
           Build evidence: ${BUILD_RUN_URL}
           EOF

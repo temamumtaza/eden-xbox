@@ -27,7 +27,7 @@ void ReadLibraryMetadata(const std::filesystem::path& root,
         entry.metadata_loaded = true;
         // A clean install has no user keys yet. Keep placeholders until the file
         // manager imports them, rather than constructing NCA readers with a zero XTS key.
-        if (!have_keys && entry.relative_path.extension() != L".nro") continue;
+        if (!have_keys && !IsHomebrewNroPath(entry.relative_path)) continue;
         try {
             const auto path = (root / entry.relative_path).u8string();
             const auto file = system.GetFilesystem()->OpenFile(entry.launch_path.empty() ?

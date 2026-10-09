@@ -17,6 +17,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 The current app interface is still in Spanish. This guide shows the Spanish menu labels as they appear on Xbox.
 
+**Platform scope:** Eden emulates Nintendo Switch, not Wii. Its library does not scan Wii `.iso`/`.wbfs` dumps; it currently recognizes Switch dumps in `.nsp`/`.xci` format and `.nro` homebrew applications. *Super Mario Galaxy 2* also has a Switch edition. The title alone does not identify which platform a dump came from, and compatibility of the Switch edition on this Xbox build has not been verified.
+
 ## Source repositories
 
 This repository is an unofficial community fork of [JulianDr14/eden-xbox](https://github.com/JulianDr14/eden-xbox), the Xbox port source repository. The main Eden project and upstream source are [eden-emu/eden](https://git.eden-emu.dev/eden-emu/eden). This repo maintains the Xbox port, Developer Mode guide, and community releases; it is not the official Eden project's release channel.
@@ -34,7 +36,7 @@ If installation reports an untrusted package, make sure you installed the certif
 
 ## Set up your own keys, firmware, and games
 
-Use the Device Portal browser to place files in Eden's storage. In **File Explorer**, open **User Folders → LocalAppData → Eden package → LocalState**. The package name can vary by version; select the installed Eden package. These are the data folders Eden reads, not temporary staging folders. You can also import keys and firmware through **Configuración → Gestor de archivos** when the Xbox folder picker can access their source folder.
+Use the Device Portal browser to place files in Eden's storage. In **File Explorer**, open **User Folders → LocalAppData → Eden package → LocalState**. The package name can vary by version; select the installed Eden package. These are the data folders Eden reads, not temporary staging folders. You can also import keys and firmware through **Configuración → Gestor de archivos** when Eden's browser or a Windows-authorized absolute path can open their source folder.
 
 Inside `LocalState`, use **New Folder** to create any missing folders until the layout looks like this:
 
@@ -64,11 +66,11 @@ There are two ways to add them:
 ### Add a firmware ZIP
 
 1. In Device Portal, open `LocalState/eden/nand/system/Contents/registered/`, choose **Upload**, and select your firmware dump ZIP.
-2. When the browser offers to extract the ZIP, choose or check **Extract** / **Extract after upload**. Wait for extraction to finish.
+2. If the upload dialog offers extraction, choose or check **Extract** / **Extract after upload**. Wait for extraction to finish.
 3. Make sure the `.nca` files are directly inside the `registered` folder. If the ZIP creates an extra folder, move the `.nca` files into `registered`.
 4. Make sure your keys are in place before using the firmware.
 
-The Device Portal File Explorer extracts the ZIP during upload; Eden reads the extracted files from the standard folder above. Microsoft documents the upload extraction option in the [Device Portal API reference](https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/device-portal-api-core).
+The Device Portal upload API supports `extract=true`, but the File Explorer checkbox can vary by portal version and has not been verified on every Xbox console. Eden reads extracted files from the standard folder above. If the portal UI does not offer extraction, extract the ZIP on your computer and upload the `.nca` files into `registered`, or use Eden's firmware import below.
 
 Alternatively, extract the ZIP on your computer first. In Eden, choose **Configuración → Gestor de archivos → Importar firmware de tu consola** and select the folder containing the extracted `.nca` files directly. A valid key set is required before importing firmware.
 
@@ -77,9 +79,11 @@ Alternatively, extract the ZIP on your computer first. In Eden, choose **Configu
 Choose internal or external storage:
 
 - **Internal storage:** upload your own game dumps to `LocalState/games/` using Device Portal File Explorer.
-- **USB or network folder:** connect the USB drive, or make the network location available to Xbox. In Eden, open **Configuración → Gestor de archivos → Agregar carpeta de juegos**, then choose the game folder in the Xbox system folder picker. Eden saves the permission Windows grants and reads games from that location without copying the dumps into `LocalState`. Keep the drive or location available while Eden uses it.
+- **USB or network folder:** in Eden, open **Configuración → Gestor de archivos**. On Xbox, **Buscar carpeta de juegos** opens Eden's browser for Eden's own storage, removable volumes exposed by Windows, and folders with saved access grants; on PC, the same option uses the Windows folder picker. **Escribir ruta de juegos** to enter an absolute path such as `D:\Games` or `\\server\share\Games`. A USB path must use a drive letter exposed by Windows; an SMB path must point to a share and folder Windows can open. Eden saves the permission Windows grants and reads games from that location without copying dumps into `LocalState`.
 
-> The folder picker only grants access to locations Windows displays and permits. An SMB/network folder can be used only if it appears in that picker and Xbox can open it; network visibility, authentication, and behavior on Xbox hardware have not been verified. Eden cannot bypass the Windows sandbox to open arbitrary private app folders or locations the system has not granted. If an external location does not appear, use `LocalState/games/` through Device Portal.
+> On Xbox, Eden's browser lists only Eden's internal storage, removable volumes exposed by Windows, and folders with saved access grants; it cannot open arbitrary Downloads or other apps' private folders. USB and SMB paths still depend on locations Windows permits. Eden does not show an SMB login prompt or save credentials. Domain-authenticated shares are not supported because this package does not declare `enterpriseAuthentication`; other SMB access still depends on Windows/Xbox permissions. `RemovableDevices`, UNC, and file reads on Xbox hardware still need testing. If an external location cannot be opened, use `LocalState/games/` through Device Portal.
+
+The package declares file-type associations so Windows can limit removable-storage and UNC access to `.nsp`, `.xci`, `.nro`, `.keys`, and `.nca`. Use Eden's folder flow to add games or import files; opening an individual file directly from another app is not supported yet.
 
 External scans recognize `.nsp`, `.xci`, and `.nro`, up to 10,000 entries. The depth limit counts the selected folder as the first level; keep game files in that folder or up to four subfolders below it.
 
@@ -92,7 +96,7 @@ Only use `prod.keys`, `title.keys`, firmware, and game dumps made from a Switch 
 ## Updates and help
 
 - Install a newer version over the existing one with the same release certificate. Do not uninstall Eden first; app data is normally preserved during an update.
-- If a game is missing, press **Menu** to refresh the library. For internal storage, check `LocalState/games/`; for external storage, make sure the drive/location is still available and add it again through **Configuración → Gestor de archivos → Agregar carpeta de juegos**.
+- If a game is missing, press **Menu** to refresh the library. For internal storage, check `LocalState/games/`; for external storage, make sure the drive/location is still available, then choose **Buscar carpeta de juegos** or **Escribir ruta de juegos** under **Configuración → Gestor de archivos**.
 - If a game is more than four subfolders below the selected folder or the scan exceeds 10,000 entries, choose a folder closer to the game or reduce the number of items being scanned.
 - If keys are not detected, check that the filename is exactly `prod.keys` and that it is directly inside `LocalState/eden/keys/`, then relaunch Eden.
 - If firmware is not detected, extract the ZIP in the Device Portal browser and make sure `.nca` files are directly inside `LocalState/eden/nand/system/Contents/registered/`.

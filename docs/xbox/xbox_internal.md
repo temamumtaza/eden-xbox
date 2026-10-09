@@ -2548,12 +2548,46 @@ Solo se usaron archivos temporales; no se modificaron partidas del usuario.
 Trampa de compilacion: R_THROW no acepta una construccion Result con coma sin
 proteger; usar constexpr Result local para el error FS5305.
 
-Auditoría de almacenamiento externo (10 oct 2026): el manifiesto ahora declara
-`privateNetworkClientServer`, pero esto solo cubre la capacidad de red privada;
-no hace visibles shares SMB ni añade credenciales o acceso a carpetas privadas.
-El gate de Xbox para picker, USB/SMB, persistencia y desconexión sigue pendiente.
-`StorageDirectory::GetFile()` hereda una búsqueda que enumera todos los archivos
-hermanos; las excepciones de enumeración pueden devolver una lista parcial. El
-scanner también deja pasar silenciosamente subcarpetas por debajo de su límite de
-profundidad. Ver `docs/xbox/xbox_rom_storage.md`; no se alteró el binario al preparar
-el paquete con el artefacto ya compilado.
+## Browser Xbox y rutas externas (10 oct 2026)
+
+El gestor de archivos usa un browser propio en Xbox: LocalFolder de Eden, los
+volumenes que enumera KnownFolders::RemovableDevices y carpetas con permisos
+persistidos en FutureAccessList. El usuario puede navegar por paginas, elegir
+la carpeta actual o escribir una ruta absoluta de unidad/UNC. UNC usa
+GetFolderFromPathAsync; las rutas de unidad prueban primero el almacenamiento
+interno, los grants guardados y las unidades expuestas, antes del broker WinRT.
+La seleccion guarda una referencia FutureAccessList, no copia los juegos.
+
+El VFS externo es de solo lectura. Intenta CreateFile2FromAppW y recurre a
+IRandomAccessStream; las lecturas son por bloques y conservan offsets de 64 bits.
+La biblioteca reconoce NSP/XCI/NRO y limita el escaneo a 16 fuentes, 10.000
+entradas y cuatro niveles bajo la carpeta elegida. Importar keys/firmware usa
+el mismo browser o path, pero copia los archivos seleccionados a LocalState.
+El browser y las operaciones WinRT de resolver, escanear e importar propagan
+cancelacion; el I/O VFS ya abierto aun espera la respuesta del sistema y no tiene
+timeout propio para un USB lento o share SMB desconectado.
+
+El manifiesto declara privateNetworkClientServer, internetClient,
+removableStorage y asociaciones para los tipos reconocidos. Esto no concede
+acceso general al sistema de archivos: Downloads, LocalAppData de otras apps y
+directorios Xbox privados permanecen fuera del sandbox; broadFileSystemAccess
+no esta soportado en Xbox. UNC necesita que Windows permita la ruta y tenga la
+autenticacion necesaria; Eden no pide ni guarda credenciales SMB. La guia
+comunitaria debe describir la funcion como acceso a ubicaciones que Windows
+expone o autoriza, no como acceso a cualquier directorio.
+
+Las pruebas host de storage-path/game-library cubren validacion de rutas,
+traversal, teclado virtual, paginacion y filtros, y el manifiesto/workflows
+parsean localmente. El gate AppContainer actual solo usa fixtures en LocalState.
+Build/package de la revision y pruebas fisicas en Series (picker, USB real,
+UNC real, persistencia tras reinicio y desconexion/reconexion) siguen pendientes;
+ni la compilacion ni el gate local certifican esas rutas en Xbox.
+
+Auditoría inicial de almacenamiento externo (10 oct 2026): se identificó que
+`privateNetworkClientServer` por sí solo no hace visibles shares SMB ni añade
+credenciales o acceso a carpetas privadas. También se detectaron enumeración
+innecesaria en `StorageDirectory::GetFile()` y profundidad omitida sin aviso. La
+revisión posterior, documentada en «Browser Xbox y rutas externas», añadió browser,
+ruta manual UNC/unidad, apertura directa de archivos y avisos de límites. El acceso
+físico a USB/SMB y la desconexión en Xbox siguen pendientes; esta auditoría inicial
+ya no describe el árbol fuente actual.

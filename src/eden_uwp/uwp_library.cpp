@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 JulianDr14
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "eden_uwp/uwp_library.h"
+#include "eden_uwp/folder_path.h"
 #include "eden_uwp/stick_navigation.h"
 #include "eden_uwp/uwp_library_canvas.h"
 #include "eden_uwp/uwp_rom_storage.h"
@@ -9,8 +10,15 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
+#include <cstdint>
+#include <cwchar>
 #include <future>
+#include <memory>
+#include <mutex>
+#include <string_view>
 #include <thread>
+#include <windows.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Gaming.Input.h>
 #include <winrt/Windows.UI.Core.h>
@@ -18,7 +26,9 @@
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.System.Profile.h>
 #include <winrt/Windows.Graphics.Display.h>
+#include <winrt/Windows.Storage.AccessCache.h>
 #include <winrt/Windows.Storage.Pickers.h>
+#include <winrt/Windows.Storage.Search.h>
 #include "eden_uwp/game_library.h"
 #include "eden_uwp/uwp_input.h"
 #include "eden_uwp/uwp_library_metadata.h"
@@ -29,6 +39,249 @@ namespace {
 using winrt::Windows::Gaming::Input::Gamepad;
 using winrt::Windows::Gaming::Input::GamepadButtons;
 using winrt::Windows::System::VirtualKey;
+using winrt::Windows::Storage::StorageFolder;
+using winrt::Windows::Storage::AccessCache::StorageApplicationPermissions;
+
+struct FolderPathFailure { std::wstring message; };
+struct FolderResolutionControl {
+    std::mutex mutex;
+    winrt::Windows::Foundation::IAsyncInfo current{nullptr};
+    bool cancelled{};
+    void Track(winrt::Windows::Foundation::IAsyncInfo operation) {
+        bool should_cancel{};
+        {
+            std::lock_guard lock{mutex};
+            current = operation;
+            should_cancel = cancelled;
+        }
+        if (should_cancel && operation) {
+            try { operation.Cancel(); } catch (...) {}
+        }
+    }
+    void Clear() {
+        std::lock_guard lock{mutex};
+        current = nullptr;
+    }
+    void Cancel() {
+        winrt::Windows::Foundation::IAsyncInfo operation{nullptr};
+        {
+            std::lock_guard lock{mutex};
+            cancelled = true;
+            operation = current;
+        }
+        if (operation) {
+            try { operation.Cancel(); } catch (...) {}
+        }
+    }
+    bool IsCancelled() {
+        std::lock_guard lock{mutex};
+        return cancelled;
+    }
+};
+struct FolderPathResolution {
+    StorageFolder folder{nullptr};
+    std::wstring error;
+    bool cancelled{};
+};
+struct FolderBrowserLoadResult {
+    std::vector<FolderBrowserEntry> entries;
+    std::wstring location;
+    std::wstring error;
+    size_t page{};
+    bool at_roots{};
+    bool has_more{};
+    bool cancelled{};
+};
+
+template <typename TOperation>
+auto AwaitFolderOperation(TOperation operation, const std::shared_ptr<FolderResolutionControl>& control) {
+    control->Track(operation.template as<winrt::Windows::Foundation::IAsyncInfo>());
+    try {
+        auto result = operation.get();
+        control->Clear();
+        return result;
+    } catch (...) {
+        control->Clear();
+        throw;
+    }
+}
+
+std::wstring FolderDisplayName(const StorageFolder& folder, std::wstring_view fallback) {
+    const auto name = folder.Name();
+    if (!name.empty()) return std::wstring{name};
+    const auto path = std::wstring{folder.Path()};
+    const auto separator = path.find_last_of(L"\\/");
+    if (separator != std::wstring::npos && separator + 1 < path.size()) return path.substr(separator + 1);
+    return std::wstring{fallback};
+}
+
+FolderBrowserLoadResult LoadFolderBrowserPage(
+    bool at_roots, const StorageFolder& current, size_t page, std::stop_token stop,
+    const std::shared_ptr<FolderResolutionControl>& control) {
+    FolderBrowserLoadResult result;
+    result.at_roots = at_roots;
+    result.page = page;
+    if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
+    if (!at_roots && !current) {
+        result.error = L"No hay una carpeta disponible para explorar.";
+        return result;
+    }
+
+    if (at_roots) {
+        struct RootCandidate {
+            std::wstring label;
+            StorageFolder folder{nullptr};
+            winrt::hstring token;
+        };
+        std::vector<RootCandidate> roots;
+        auto local = winrt::Windows::Storage::ApplicationData::Current().LocalFolder();
+        roots.push_back({L"Almacenamiento interno de Eden", local, {}});
+        try {
+            auto volumes = AwaitFolderOperation(
+                winrt::Windows::Storage::KnownFolders::RemovableDevices().GetFoldersAsync(), control);
+            for (const auto& volume : volumes) {
+                if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
+                roots.push_back({L"Dispositivo extraible: " + FolderDisplayName(volume, L"Unidad"), volume, {}});
+            }
+        } catch (const winrt::hresult_error&) {
+            if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
+            // The internal folder and saved grants remain useful if removable storage is absent.
+        }
+
+        // FutureAccessList is platform-bounded. Resolve only the visible page so a
+        // large saved grant list cannot stall navigation or allocate an unbounded view.
+        const auto grants = StorageApplicationPermissions::FutureAccessList().Entries();
+        for (const auto& entry : grants)
+            roots.push_back({L"Acceso guardado", nullptr, entry.Token});
+
+        const auto page_range = GetFolderBrowserPageRange(roots.size(), page);
+        for (size_t i = page_range.begin; i < page_range.end; ++i) {
+            if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
+            auto& candidate = roots[i];
+            if (!candidate.folder) {
+                try {
+                    candidate.folder = AwaitFolderOperation(
+                        StorageApplicationPermissions::FutureAccessList().GetFolderAsync(candidate.token), control);
+                    candidate.label += L": " + FolderDisplayName(candidate.folder, L"Carpeta guardada");
+                } catch (const winrt::hresult_error&) {
+                    if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
+                    continue; // Stale grants do not prevent access to later entries.
+                }
+            }
+            result.entries.push_back({std::move(candidate.label), std::move(candidate.folder)});
+        }
+        result.has_more = page_range.has_more;
+        result.location = L"Ubicaciones disponibles para Eden";
+        return result;
+    }
+
+    result.location = std::wstring{current.Path()};
+    try {
+        const auto start = static_cast<uint32_t>(std::min<size_t>(page, UINT32_MAX - FolderBrowserPageSize - 1));
+        auto folders = AwaitFolderOperation(current.GetFoldersAsync(
+            winrt::Windows::Storage::Search::CommonFolderQuery::DefaultQuery,
+            start, static_cast<uint32_t>(FolderBrowserPageSize + 1)), control);
+        const auto visible = std::min<uint32_t>(folders.Size(), static_cast<uint32_t>(FolderBrowserPageSize));
+        result.entries.reserve(visible);
+        for (uint32_t i = 0; i < visible; ++i) {
+            if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; result.entries.clear(); return result; }
+            const auto folder = folders.GetAt(i);
+            result.entries.push_back({FolderDisplayName(folder, L"Carpeta"), folder});
+        }
+        result.has_more = folders.Size() > FolderBrowserPageSize;
+    } catch (const winrt::hresult_error&) {
+        if (stop.stop_requested() || control->IsCancelled()) result.cancelled = true;
+        else result.error = L"Windows no pudo enumerar esta carpeta. Comprueba los permisos y que la unidad siga conectada.";
+    }
+    return result;
+}
+
+bool PathStartsWithFolder(std::wstring_view path, std::wstring_view folder_path) {
+    return IsSameOrDescendantFolderPath(path, folder_path, [](std::wstring_view a, std::wstring_view b) {
+        return a.size() <= INT_MAX && CompareStringOrdinal(a.data(), static_cast<int>(a.size()),
+                   b.data(), static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+    });
+}
+
+StorageFolder NavigateFolderPath(StorageFolder folder, std::wstring_view path,
+                                 std::stop_token stop,
+                                 const std::shared_ptr<FolderResolutionControl>& control) {
+    const std::wstring root_path{folder.Path()};
+    if (!PathStartsWithFolder(path, root_path)) return nullptr;
+    size_t offset = root_path.size();
+    while (offset < path.size() && path[offset] == L'\\') ++offset;
+    while (offset < path.size()) {
+        if (stop.stop_requested() || control->IsCancelled()) return nullptr;
+        const auto end = path.find(L'\\', offset);
+        const auto length = (end == std::wstring_view::npos ? path.size() : end) - offset;
+        const auto component = path.substr(offset, length);
+        if (component == L"." || component == L".." || component.empty())
+            throw FolderPathFailure{L"La ruta contiene un componente no valido."};
+        folder = AwaitFolderOperation(folder.GetFolderAsync(winrt::to_hstring(component)), control);
+        if (end == std::wstring_view::npos) break;
+        offset = end + 1;
+    }
+    return folder;
+}
+
+StorageFolder ResolveFolderPath(std::wstring_view path, std::stop_token stop,
+                                const std::shared_ptr<FolderResolutionControl>& control) {
+    if (stop.stop_requested() || control->IsCancelled()) return nullptr;
+    if (path.starts_with(L"\\\\"))
+        return AwaitFolderOperation(StorageFolder::GetFolderFromPathAsync(winrt::hstring{path}), control);
+
+    // LocalState is directly available to this app. Other drive paths are first
+    // resolved through saved grants and RemovableDevices before the broker fallback.
+    auto local = winrt::Windows::Storage::ApplicationData::Current().LocalFolder();
+    if (PathStartsWithFolder(path, std::wstring{local.Path()}))
+        return NavigateFolderPath(local, path, stop, control);
+
+    // Use only folders for which this app has a persisted FutureAccessList grant.
+    // A grant can point at a subfolder beneath a mounted volume, so check it before
+    // the volume roots and navigate descendants through StorageFolder APIs.
+    const auto grants = StorageApplicationPermissions::FutureAccessList().Entries();
+    for (const auto& entry : grants) {
+        if (stop.stop_requested() || control->IsCancelled()) return nullptr;
+        try {
+            auto granted = AwaitFolderOperation(
+                StorageApplicationPermissions::FutureAccessList().GetFolderAsync(entry.Token), control);
+            if (PathStartsWithFolder(path, std::wstring{granted.Path()}))
+                return NavigateFolderPath(granted, path, stop, control);
+        } catch (const winrt::hresult_error&) {
+            // A stale grant (for example a removed USB) must not hide later roots.
+        }
+    }
+
+    try {
+        auto volumes = AwaitFolderOperation(
+            winrt::Windows::Storage::KnownFolders::RemovableDevices().GetFoldersAsync(), control);
+        for (const auto& volume : volumes) {
+            if (stop.stop_requested() || control->IsCancelled()) return nullptr;
+            if (PathStartsWithFolder(path, std::wstring{volume.Path()}))
+                return NavigateFolderPath(volume, path, stop, control);
+        }
+    } catch (const winrt::hresult_error&) {
+        if (stop.stop_requested() || control->IsCancelled()) return nullptr;
+        // A platform that denies removable-volume enumeration can still resolve
+        // a drive path that Windows otherwise exposes to this app.
+    }
+
+    // Last, ask the WinRT storage broker directly. This does not bypass the
+    // AppContainer: Windows still decides whether this absolute drive path is visible.
+    return AwaitFolderOperation(StorageFolder::GetFolderFromPathAsync(winrt::hstring{path}), control);
+}
+
+std::wstring FolderPathError(const winrt::hresult_error& error, bool unc) {
+    const HRESULT hr = error.code();
+    const DWORD code = HRESULT_CODE(hr);
+    if (hr == E_ACCESSDENIED || code == ERROR_ACCESS_DENIED)
+        return L"Acceso denegado. Windows no permite esta ruta a la app; las rutas privadas de Xbox siguen dentro del sandbox.";
+    if (code == ERROR_PATH_NOT_FOUND || code == ERROR_FILE_NOT_FOUND || code == ERROR_NOT_FOUND)
+        return L"No se encontro la carpeta. Comprueba la ruta y que la unidad este conectada.";
+    if (unc)
+        return L"No se pudo alcanzar o abrir la carpeta de red. Comprueba SMB y que Windows tenga acceso. No se guardan credenciales.";
+    return L"No se pudo abrir la carpeta. Comprueba que la ruta sea absoluta y que Windows permita el acceso.";
+}
 
 } // namespace
 
@@ -50,6 +303,17 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
     FileImportProgress import_progress;
     std::future<std::string> import_future;
     std::jthread import_worker;
+    std::future<FolderPathResolution> folder_path_future;
+    std::jthread folder_path_worker;
+    std::shared_ptr<FolderResolutionControl> folder_path_control;
+    bool folder_path_cancelled = false;
+    std::future<FolderBrowserLoadResult> folder_browser_future;
+    std::jthread folder_browser_worker;
+    std::shared_ptr<FolderResolutionControl> folder_browser_control;
+    bool folder_browser_cancelled = false;
+    StorageFolder browser_current{nullptr};
+    std::vector<StorageFolder> browser_stack;
+    bool added_folder_pending = false;
     std::chrono::steady_clock::time_point auto_pick_at{};
     unsigned setting_row = 0;
     ControllerPanel panel;
@@ -72,6 +336,60 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         panel.keyboard.notice.clear();
         panel.keyboard.capturing = true;
         capture_until = std::chrono::steady_clock::now() + std::chrono::seconds{4};
+        dirty = true;
+    };
+    auto insert_path_text = [&](std::wstring_view value) {
+        if (value.empty() || configuration.path_resolving) return;
+        if (configuration.path_text.size() + value.size() > FolderPathInputLimit) {
+            configuration.path_error = L"La ruta supera el limite de 1024 caracteres.";
+            dirty = true;
+            return;
+        }
+        configuration.path_text.insert(configuration.path_cursor, value);
+        configuration.path_cursor += value.size();
+        configuration.path_error.clear();
+        dirty = true;
+    };
+    auto erase_path_before_cursor = [&] {
+        if (!configuration.path_cursor || configuration.path_resolving) return;
+        size_t first = configuration.path_cursor - 1;
+        if (first && configuration.path_text[first] >= 0xdc00 && configuration.path_text[first] <= 0xdfff &&
+            configuration.path_text[first - 1] >= 0xd800 && configuration.path_text[first - 1] <= 0xdbff)
+            --first;
+        configuration.path_text.erase(first, configuration.path_cursor - first);
+        configuration.path_cursor = first;
+        configuration.path_error.clear();
+        dirty = true;
+    };
+    auto erase_path_at_cursor = [&] {
+        if (configuration.path_cursor >= configuration.path_text.size() || configuration.path_resolving) return;
+        size_t last = configuration.path_cursor + 1;
+        if (last < configuration.path_text.size() && configuration.path_text[configuration.path_cursor] >= 0xd800 &&
+            configuration.path_text[configuration.path_cursor] <= 0xdbff &&
+            configuration.path_text[last] >= 0xdc00 && configuration.path_text[last] <= 0xdfff)
+            ++last;
+        configuration.path_text.erase(configuration.path_cursor, last - configuration.path_cursor);
+        configuration.path_error.clear();
+        dirty = true;
+    };
+    auto move_path_cursor = [&](bool right) {
+        if (configuration.path_resolving) return;
+        if (right && configuration.path_cursor < configuration.path_text.size()) {
+            if (configuration.path_text[configuration.path_cursor] >= 0xd800 &&
+                configuration.path_text[configuration.path_cursor] <= 0xdbff &&
+                configuration.path_cursor + 1 < configuration.path_text.size() &&
+                configuration.path_text[configuration.path_cursor + 1] >= 0xdc00 &&
+                configuration.path_text[configuration.path_cursor + 1] <= 0xdfff)
+                configuration.path_cursor += 2;
+            else ++configuration.path_cursor;
+        } else if (!right && configuration.path_cursor) {
+            --configuration.path_cursor;
+            if (configuration.path_cursor && configuration.path_text[configuration.path_cursor] >= 0xdc00 &&
+                configuration.path_text[configuration.path_cursor] <= 0xdfff &&
+                configuration.path_text[configuration.path_cursor - 1] >= 0xd800 &&
+                configuration.path_text[configuration.path_cursor - 1] <= 0xdbff)
+                --configuration.path_cursor;
+        }
         dirty = true;
     };
     bool device_changed = false;
@@ -101,6 +419,37 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
     });
     auto keyboard = window.KeyDown(winrt::auto_revoke, [&](auto&&, KeyEventArgs const& e) {
         if (e.KeyStatus().WasKeyDown) return;
+        if (configuration.path_entry_open) {
+            const auto key = e.VirtualKey();
+            if (key == VirtualKey::Escape) { actions |= Quit; e.Handled(true); }
+            else if (key == VirtualKey::Enter) {
+                configuration.path_key = FolderPathKeyboardKeyCount - 1;
+                actions |= Play; e.Handled(true);
+            }
+            else if (key == VirtualKey::Back) { erase_path_before_cursor(); e.Handled(true); }
+            else if (key == VirtualKey::Delete) { erase_path_at_cursor(); e.Handled(true); }
+            else if (key == VirtualKey::Left) { move_path_cursor(false); e.Handled(true); }
+            else if (key == VirtualKey::Right) { move_path_cursor(true); e.Handled(true); }
+            else if (key == VirtualKey::Home) { configuration.path_cursor = 0; dirty = true; e.Handled(true); }
+            else if (key == VirtualKey::End) {
+                configuration.path_cursor = configuration.path_text.size(); dirty = true; e.Handled(true);
+            } else if (configuration.path_resolving) e.Handled(true);
+            // Let printable key events reach CharacterReceived for Unicode input.
+            return;
+        }
+        if (configuration.browser_open) {
+            switch (e.VirtualKey()) {
+            case VirtualKey::Up: actions |= Up; break;
+            case VirtualKey::Down: actions |= Down; break;
+            case VirtualKey::Left: actions |= Left; break;
+            case VirtualKey::Right: actions |= Right; break;
+            case VirtualKey::Enter: actions |= Play; break;
+            case VirtualKey::Escape: actions |= Quit; break;
+            default: break;
+            }
+            e.Handled(true);
+            return;
+        }
         auto& editor = panel.keyboard;
         if (editor.open) {
             const auto key = e.VirtualKey();
@@ -149,12 +498,63 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         }
         e.Handled(true);
     });
+    auto character_received = window.CharacterReceived(winrt::auto_revoke, [&](auto&&, CharacterReceivedEventArgs const& e) {
+        if (!configuration.path_entry_open || configuration.path_resolving) return;
+        const auto codepoint = static_cast<uint32_t>(e.KeyCode());
+        if (codepoint >= 0x20 && codepoint <= 0x10ffff && codepoint != 0x7f) {
+            if (codepoint <= 0xffff) {
+                const wchar_t character = static_cast<wchar_t>(codepoint);
+                insert_path_text(std::wstring_view{&character, 1});
+            } else {
+                const uint32_t adjusted = codepoint - 0x10000;
+                const wchar_t pair[]{static_cast<wchar_t>(0xd800 + (adjusted >> 10)),
+                                     static_cast<wchar_t>(0xdc00 + (adjusted & 0x3ff))};
+                insert_path_text(std::wstring_view{pair, 2});
+            }
+        }
+        e.Handled(true);
+    });
     auto pointer = window.PointerPressed(winrt::auto_revoke, [&](auto&&, PointerEventArgs const& e) {
         const auto p = e.CurrentPoint().Position();
         const auto dpi = winrt::Windows::Graphics::Display::DisplayInformation::GetForCurrentView().RawPixelsPerViewPixel();
         const auto scale = std::max(0.01f, std::min(width / 1280.0f, height / 720.0f));
         const float x = static_cast<float>((p.X * dpi - (width - 1280 * scale) / 2) / scale);
         const float y = static_cast<float>((p.Y * dpi - (height - 720 * scale) / 2) / scale);
+        if (configuration.browser_open) {
+            if (y >= 604 && y < 652) {
+                if (x < 330) actions |= Play;
+                else if (x < 610) actions |= Left;
+                else if (x < 930) actions |= Right;
+                else actions |= Quit;
+            } else if (!configuration.browser_loading) {
+                const size_t count = configuration.browser_at_roots ? configuration.browser_entries.size() :
+                                     2 + configuration.browser_entries.size();
+                const auto row = FolderBrowserRowAt(x, y, count);
+                if (row < FolderBrowserVisibleRows) {
+                    configuration.browser_selected = row; actions |= Play; dirty = true;
+                }
+            }
+            e.Handled(true);
+            return;
+        }
+        if (configuration.path_entry_open) {
+            if (x >= 980 && y >= 604 && y < 652) actions |= Quit;
+            else if (!configuration.path_resolving && x >= 100 && x < 330 && y >= 604 && y < 652) {
+                configuration.path_key = FolderPathKeyboardKeyCount - 1;
+                actions |= Play;
+            } else if (!configuration.path_resolving && x >= 108 && x <= 1172 && y >= 172 && y < 226) {
+                configuration.path_cursor = configuration.path_text.size();
+                dirty = true;
+            } else if (!configuration.path_resolving) {
+                const auto key = FolderPathKeyboardKeyAt(x, y, configuration.path_symbols);
+                if (key < FolderPathKeyboardKeyCount) {
+                    configuration.path_key = key;
+                    actions |= Play;
+                }
+            }
+            e.Handled(true);
+            return;
+        }
         if (configuration.open && !settings) {
             const auto layout = GetConfigurationLayout(configuration);
             if (y >= layout.footer - 7 && y < layout.footer + 40 &&
@@ -252,6 +652,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         setup_worker = std::jthread(std::move(task));
     };
     auto start_scan = [&](StorageFolder added = nullptr) {
+        added_folder_pending = static_cast<bool>(added);
         loading = dirty = true;
         ++generation;
         metadata_dirty = true;
@@ -267,14 +668,26 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             std::error_code ec;
             std::filesystem::create_directories(root, ec);
             auto result = ScanGameLibrary(root, stop);
+            std::vector<std::wstring> internal_game_paths;
+            internal_game_paths.reserve(result.entries.size());
             for (auto& entry : result.entries) {
-                const auto path = (root / entry.relative_path).u8string();
+                const auto file_path = root / entry.relative_path;
+                const auto path = file_path.u8string();
                 entry.launch_path.assign(reinterpret_cast<const char*>(path.data()), path.size());
+                internal_game_paths.push_back(file_path.wstring());
                 entry.source_name = L"Interna";
             }
+            if (added) {
+                try {
+                    RememberGameFolder(added, stop);
+                } catch (const winrt::hresult_error& e) {
+                    result.error = "No se pudo guardar la carpeta externa: " + winrt::to_string(e.message());
+                } catch (const std::exception& e) {
+                    result.error = e.what();
+                }
+            }
             try {
-                if (added) RememberGameFolder(added);
-                auto external = ScanExternalGameFolders(stop);
+                auto external = ScanExternalGameFolders(stop, internal_game_paths);
                 if (!external.error.empty()) {
                     if (!result.error.empty()) result.error += " | ";
                     result.error += external.error;
@@ -283,8 +696,12 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                 result.entries.insert(result.entries.end(),
                     std::make_move_iterator(external.entries.begin()), std::make_move_iterator(external.entries.end()));
             } catch (const winrt::hresult_error& e) {
-                result.error = "No se pudo autorizar/recuperar la carpeta: " + winrt::to_string(e.message());
-            } catch (const std::exception& e) { result.error = e.what(); }
+                if (!result.error.empty()) result.error += " | ";
+                result.error += "No se pudo recuperar una carpeta externa: " + winrt::to_string(e.message());
+            } catch (const std::exception& e) {
+                if (!result.error.empty()) result.error += " | ";
+                result.error += e.what();
+            }
             if (!result.entries.empty() && result.error == "La carpeta games esta vacia o no existe.") result.error.clear();
             std::sort(result.entries.begin(), result.entries.end(), [](const auto& a, const auto& b) {
                 return a.launch_path < b.launch_path;
@@ -293,6 +710,249 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         }};
         future = task.get_future();
         scanner = std::jthread(std::move(task));
+    };
+    auto begin_import = [&](StorageFolder folder, unsigned kind) {
+        configuration.busy = true;
+        configuration.notice.clear();
+        import_progress.completed = 0;
+        import_progress.total = 0;
+        metadata_worker.request_stop();
+        std::packaged_task<std::string(std::stop_token)> task{
+            [folder, kind, old_metadata = std::move(metadata_worker), &import_progress](std::stop_token stop) mutable {
+                if (old_metadata.joinable()) old_metadata.join();
+                winrt::init_apartment(winrt::apartment_type::multi_threaded);
+                struct Uninitialize { ~Uninitialize() { winrt::uninit_apartment(); } } guard;
+                return ImportSystemFiles(folder, kind == 1 ? FileImport::Keys : FileImport::Firmware,
+                                         import_progress, stop);
+            }};
+        import_future = task.get_future();
+        import_worker = std::jthread(std::move(task));
+        dirty = true;
+    };
+    auto start_folder_browser_load = [&](bool at_roots, StorageFolder current, size_t page) {
+        if (folder_browser_future.valid()) return false;
+        configuration.browser_loading = true;
+        configuration.browser_at_roots = at_roots;
+        configuration.browser_page = page;
+        configuration.browser_selected = 0;
+        configuration.browser_entries.clear();
+        configuration.browser_location.clear();
+        configuration.browser_error.clear();
+        folder_browser_cancelled = false;
+        auto control = std::make_shared<FolderResolutionControl>();
+        folder_browser_control = control;
+        std::packaged_task<FolderBrowserLoadResult(std::stop_token, bool, StorageFolder, size_t,
+                                                    std::shared_ptr<FolderResolutionControl>)> task{
+            [](std::stop_token stop, bool roots, StorageFolder folder, size_t first,
+               std::shared_ptr<FolderResolutionControl> operation_control) {
+                winrt::init_apartment(winrt::apartment_type::multi_threaded);
+                struct Uninitialize { ~Uninitialize() { winrt::uninit_apartment(); } } guard;
+                try { return LoadFolderBrowserPage(roots, folder, first, stop, operation_control); }
+                catch (const winrt::hresult_error& error) {
+                    FolderBrowserLoadResult result;
+                    result.at_roots = roots;
+                    result.page = first;
+                    result.cancelled = stop.stop_requested() || operation_control->IsCancelled();
+                    if (!result.cancelled) result.error = L"No se pudo enumerar esta ubicacion: " + std::wstring{error.message()};
+                    return result;
+                } catch (...) {
+                    FolderBrowserLoadResult result;
+                    result.at_roots = roots;
+                    result.page = first;
+                    result.cancelled = stop.stop_requested() || operation_control->IsCancelled();
+                    if (!result.cancelled) result.error = L"No se pudo enumerar esta ubicacion.";
+                    return result;
+                }
+            }};
+        folder_browser_future = task.get_future();
+        folder_browser_worker = std::jthread(std::move(task), at_roots, std::move(current), page, std::move(control));
+        dirty = true;
+        return true;
+    };
+    auto open_folder_browser = [&] {
+        if (folder_browser_future.valid()) {
+            configuration.notice = L"Espera a que termine la comprobacion anterior.";
+            dirty = true;
+            return;
+        }
+        configuration.browser_open = true;
+        configuration.browser_at_roots = true;
+        configuration.browser_page = 0;
+        configuration.browser_selected = 0;
+        configuration.browser_error.clear();
+        configuration.browser_location.clear();
+        browser_current = nullptr;
+        browser_stack.clear();
+        start_folder_browser_load(true, nullptr, 0);
+    };
+    auto use_browser_folder = [&](StorageFolder folder) {
+        const auto purpose = configuration.path_purpose;
+        configuration.browser_open = false;
+        configuration.browser_loading = false;
+        configuration.browser_entries.clear();
+        configuration.browser_error.clear();
+        browser_current = nullptr;
+        browser_stack.clear();
+        if (purpose == FolderPathPurpose::Games) {
+            configuration.notice = L"Carpeta seleccionada. Agregando juegos a la biblioteca...";
+            start_scan(std::move(folder));
+        } else {
+            configuration.notice = L"Carpeta seleccionada. Importando archivos...";
+            begin_import(std::move(folder), purpose == FolderPathPurpose::Keys ? 1U : 2U);
+        }
+        dirty = true;
+    };
+    auto go_up_in_folder_browser = [&] {
+        if (browser_stack.empty()) {
+            browser_current = nullptr;
+            start_folder_browser_load(true, nullptr, 0);
+        } else {
+            browser_current = browser_stack.back();
+            browser_stack.pop_back();
+            start_folder_browser_load(false, browser_current, 0);
+        }
+    };
+    auto activate_folder_browser_selection = [&] {
+        if (configuration.browser_loading) return;
+        const size_t selected_row = configuration.browser_selected;
+        if (configuration.browser_at_roots) {
+            if (selected_row >= configuration.browser_entries.size()) return;
+            browser_current = configuration.browser_entries[selected_row].folder;
+            browser_stack.clear();
+            start_folder_browser_load(false, browser_current, 0);
+            return;
+        }
+        if (selected_row == 0) {
+            use_browser_folder(browser_current);
+        } else if (selected_row == 1) {
+            go_up_in_folder_browser();
+        } else {
+            const size_t child = selected_row - 2;
+            if (child >= configuration.browser_entries.size()) return;
+            browser_stack.push_back(browser_current);
+            browser_current = configuration.browser_entries[child].folder;
+            start_folder_browser_load(false, browser_current, 0);
+        }
+    };
+    auto page_folder_browser = [&](bool next) {
+        if (configuration.browser_loading) return;
+        const size_t page = configuration.browser_page;
+        if (next) {
+            if (!configuration.browser_has_more) return;
+            start_folder_browser_load(configuration.browser_at_roots, browser_current,
+                                      page + FolderBrowserPageSize);
+        } else if (page >= FolderBrowserPageSize) {
+            start_folder_browser_load(configuration.browser_at_roots, browser_current,
+                                      page - FolderBrowserPageSize);
+        }
+    };
+    auto begin_folder_path_resolution = [&] {
+        auto path = NormalizeExternalFolderPath(configuration.path_text);
+        if (path.empty()) {
+            configuration.path_error = L"Escribe una ruta de carpeta.";
+            dirty = true;
+            return;
+        }
+        if (path.size() > FolderPathInputLimit) {
+            configuration.path_error = L"La ruta supera el limite de 1024 caracteres.";
+            dirty = true;
+            return;
+        }
+        if (!IsAllowedAbsoluteFolderPath(path)) {
+            configuration.path_error = L"Escribe una ruta absoluta como D:\\Juegos o \\\\servidor\\carpeta.";
+            dirty = true;
+            return;
+        }
+        if (folder_path_future.valid()) {
+            configuration.path_error = L"La comprobacion anterior sigue en curso. Espera o cancelala.";
+            dirty = true;
+            return;
+        }
+        configuration.path_text = path;
+        configuration.path_cursor = path.size();
+        configuration.path_error.clear();
+        configuration.path_resolving = true;
+        folder_path_cancelled = false;
+        const bool unc = path.starts_with(L"\\\\");
+        auto control = std::make_shared<FolderResolutionControl>();
+        folder_path_control = control;
+        std::packaged_task<FolderPathResolution(std::stop_token, std::wstring, bool,
+                                                 std::shared_ptr<FolderResolutionControl>)> task{
+            [](std::stop_token stop, std::wstring requested_path, bool is_unc,
+               std::shared_ptr<FolderResolutionControl> operation_control) {
+                winrt::init_apartment(winrt::apartment_type::multi_threaded);
+                struct Uninitialize { ~Uninitialize() { winrt::uninit_apartment(); } } guard;
+                FolderPathResolution result;
+                try {
+                    result.folder = ResolveFolderPath(requested_path, stop, operation_control);
+                    result.cancelled = stop.stop_requested() || operation_control->IsCancelled() || !result.folder;
+                    if (result.cancelled) result.folder = nullptr;
+                } catch (const FolderPathFailure& error) {
+                    result.error = error.message;
+                } catch (const winrt::hresult_error& error) {
+                    result.cancelled = stop.stop_requested() || operation_control->IsCancelled();
+                    if (!result.cancelled) result.error = FolderPathError(error, is_unc);
+                } catch (...) {
+                    result.cancelled = stop.stop_requested() || operation_control->IsCancelled();
+                    if (!result.cancelled) result.error = L"No se pudo abrir la carpeta. Comprueba la ruta y los permisos.";
+                }
+                return result;
+            }};
+        folder_path_future = task.get_future();
+        folder_path_worker = std::jthread(std::move(task), std::move(path), unc, std::move(control));
+        dirty = true;
+    };
+    auto activate_folder_path_key = [&] {
+        if (configuration.path_resolving || configuration.path_key >= FolderPathKeyboardKeyCount) return;
+        const auto label = FolderPathKeyboardKey(configuration.path_key, configuration.path_symbols);
+        if (label.empty()) return;
+        if (label == L"Agregar") { begin_folder_path_resolution(); return; }
+        if (label == L"Borrar") { erase_path_before_cursor(); return; }
+        if (label == L"Izquierda") { move_path_cursor(false); return; }
+        if (label == L"Derecha") { move_path_cursor(true); return; }
+        if (label == L"Simbolos") { configuration.path_symbols = true; dirty = true; return; }
+        if (label == L"Letras") { configuration.path_symbols = false; dirty = true; return; }
+        if (label == L"Mayus") { configuration.path_uppercase = !configuration.path_uppercase; dirty = true; return; }
+        if (label == L"Limpiar") {
+            configuration.path_text.clear(); configuration.path_cursor = 0;
+            configuration.path_error.clear(); dirty = true; return;
+        }
+        if (label == L"Espacio") { insert_path_text(L" "); return; }
+        insert_path_text(FolderPathKeyboardInput(configuration.path_key, configuration.path_symbols,
+                                                  configuration.path_uppercase));
+    };
+    auto move_folder_path_key = [&](int columns, int rows) {
+        const auto& layout = configuration.path_symbols ? FolderPathSymbolsKeyboard : FolderPathLettersKeyboard;
+        const auto current_row = static_cast<int>(configuration.path_key / FolderPathKeyboardColumns);
+        const auto current_column = static_cast<int>(configuration.path_key % FolderPathKeyboardColumns);
+        const int target_row = std::clamp(current_row + rows, 0, static_cast<int>(FolderPathKeyboardRows) - 1);
+        const int target_column = std::clamp(current_column + columns, 0, static_cast<int>(FolderPathKeyboardColumns) - 1);
+        if (rows == 0) {
+            for (int step = 0; step < static_cast<int>(FolderPathKeyboardColumns); ++step) {
+                const int candidate = target_column + (columns < 0 ? -step : step);
+                if (candidate < 0 || candidate >= static_cast<int>(FolderPathKeyboardColumns)) continue;
+                if (!layout[target_row][candidate].empty()) {
+                    configuration.path_key = static_cast<size_t>(target_row * FolderPathKeyboardColumns + candidate);
+                    dirty = true;
+                    return;
+                }
+            }
+        } else {
+            for (int distance = 0; distance < static_cast<int>(FolderPathKeyboardColumns); ++distance) {
+                const int left = target_column - distance;
+                const int right = target_column + distance;
+                if (left >= 0 && !layout[target_row][left].empty()) {
+                    configuration.path_key = static_cast<size_t>(target_row * FolderPathKeyboardColumns + left);
+                    dirty = true;
+                    return;
+                }
+                if (right < static_cast<int>(FolderPathKeyboardColumns) && !layout[target_row][right].empty()) {
+                    configuration.path_key = static_cast<size_t>(target_row * FolderPathKeyboardColumns + right);
+                    dirty = true;
+                    return;
+                }
+            }
+        }
     };
     start_scan();
     GamepadButtons previous{};
@@ -333,7 +993,8 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             pad = next;
             next_pad_check = now + std::chrono::milliseconds{500};
         }
-        const unsigned context = panel.keyboard.open ? 3 : panel.expanded ? 2 : settings ? 1 : configuration.open ? 4 : 0;
+        const unsigned context = configuration.browser_open ? 6 : configuration.path_entry_open ? 5 : panel.keyboard.open ? 3 :
+                                 panel.expanded ? 2 : settings ? 1 : configuration.open ? 4 : 0;
         if (context != navigation_context) {
             stick_navigation.Reset(); navigation_context = context;
         }
@@ -366,39 +1027,37 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     if (hit(GamepadButtons::DPadLeft)) actions |= Left;
                     if (hit(GamepadButtons::DPadRight)) actions |= Right;
                     if (hit(GamepadButtons::A)) actions |= Play;
-                    if (hit(GamepadButtons::X)) {
-                        if (settings) actions |= Swap;
-                        else if (!configuration.open) actions |= AddFolder;
+                    if (!configuration.path_entry_open && !configuration.browser_open) {
+                        if (hit(GamepadButtons::X)) {
+                            if (settings) actions |= Swap;
+                            else if (!configuration.open) actions |= AddFolder;
+                        }
+                        if (hit(GamepadButtons::Y)) actions |= Zone;
+                        if (hit(GamepadButtons::Menu)) actions |= Refresh;
+                        if (hit(GamepadButtons::View)) actions |= Panel;
                     }
-                    if (hit(GamepadButtons::Y)) actions |= Zone;
-                    if (hit(GamepadButtons::Menu)) actions |= Refresh;
-                    if (hit(GamepadButtons::View)) actions |= Panel;
                 }
             } catch (...) { pad.reset(); previous = {}; stick_navigation.Reset(); }
         }
-        if (window_closed || QuitRequested()) return std::nullopt;
+        if (window_closed || QuitRequested()) {
+            if (folder_path_control) {
+                folder_path_control->Cancel();
+                folder_path_worker.request_stop();
+            }
+            if (folder_browser_control) {
+                folder_browser_control->Cancel();
+                folder_browser_worker.request_stop();
+            }
+            return std::nullopt;
+        }
         if (picker) {
             actions = 0; // The system picker owns input until it returns.
             if (picker.Status() != winrt::Windows::Foundation::AsyncStatus::Started) {
                 try {
                     auto folder = picker.GetResults();
                     if (folder && picker_kind == 0) start_scan(folder);
-                    else if (folder) {
-                        configuration.busy = true;
-                        configuration.notice.clear();
-                        import_progress.completed = 0;
-                        import_progress.total = 0;
-                        metadata_worker.request_stop();
-                        std::packaged_task<std::string(std::stop_token)> task{
-                            [folder, kind = picker_kind, old_metadata = std::move(metadata_worker), &import_progress](std::stop_token stop) mutable {
-                                if (old_metadata.joinable()) old_metadata.join();
-                                winrt::init_apartment(winrt::apartment_type::multi_threaded);
-                                struct Uninitialize { ~Uninitialize() { winrt::uninit_apartment(); } } guard;
-                                return ImportSystemFiles(folder, kind == 1 ? FileImport::Keys : FileImport::Firmware, import_progress, stop);
-                            }};
-                        import_future = task.get_future();
-                        import_worker = std::jthread(std::move(task));
-                    } else { configuration.notice = L"Seleccion cancelada."; dirty = true; }
+                    else if (folder) begin_import(folder, picker_kind);
+                    else { configuration.notice = L"Seleccion cancelada."; dirty = true; }
                 } catch (const winrt::hresult_error& e) {
                     configuration.notice = L"No se pudo seleccionar la carpeta: " + std::wstring{e.message()}; dirty = true;
                 }
@@ -446,7 +1105,39 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             }
         }
         if (actions & Quit) {
-            if (panel.keyboard.open) { panel.keyboard.open = panel.keyboard.capturing = false; dirty = true; actions &= ~Quit; }
+            if (configuration.browser_open) {
+                if (configuration.browser_loading && folder_browser_future.valid()) {
+                    folder_browser_cancelled = true;
+                    if (folder_browser_control) folder_browser_control->Cancel();
+                    folder_browser_worker.request_stop();
+                    configuration.browser_open = false;
+                    configuration.browser_loading = false;
+                    configuration.browser_entries.clear();
+                    browser_current = nullptr;
+                    browser_stack.clear();
+                } else if (!configuration.browser_at_roots) {
+                    go_up_in_folder_browser();
+                } else {
+                    configuration.browser_open = false;
+                    configuration.browser_entries.clear();
+                    browser_current = nullptr;
+                    browser_stack.clear();
+                }
+                dirty = true; actions &= ~Quit;
+            }
+            else if (configuration.path_entry_open) {
+                if (configuration.path_resolving && folder_path_future.valid()) {
+                    folder_path_cancelled = true;
+                    if (folder_path_control) folder_path_control->Cancel();
+                    folder_path_worker.request_stop();
+                }
+                configuration.path_entry_open = false;
+                configuration.path_resolving = false;
+                configuration.path_text.clear();
+                configuration.path_error.clear();
+                dirty = true; actions &= ~Quit;
+            }
+            else if (panel.keyboard.open) { panel.keyboard.open = panel.keyboard.capturing = false; dirty = true; actions &= ~Quit; }
             else if (panel.expanded) { panel.expanded = false; dirty = true; actions &= ~Quit; }
             else if (settings) { settings = false; configuration.open = return_to_configuration; return_to_configuration = false; dirty = true; actions &= ~Quit; }
             else if (configuration.open) {
@@ -456,12 +1147,91 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             }
             else return std::nullopt;
         }
+        if (folder_path_future.valid() && folder_path_future.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
+            FolderPathResolution result;
+            try { result = folder_path_future.get(); }
+            catch (...) { result.error = L"No se pudo comprobar la carpeta."; }
+            if (folder_path_worker.joinable()) folder_path_worker.join();
+            folder_path_control.reset();
+            if (!folder_path_cancelled && configuration.path_entry_open && configuration.path_resolving) {
+                const auto purpose = configuration.path_purpose;
+                configuration.path_resolving = false;
+                if (result.folder) {
+                    configuration.path_entry_open = false;
+                    configuration.path_text.clear();
+                    configuration.path_error.clear();
+                    if (purpose == FolderPathPurpose::Games) {
+                        configuration.notice = L"Carpeta accesible. Agregando juegos a la biblioteca...";
+                        start_scan(result.folder);
+                    } else {
+                        configuration.notice = L"Carpeta accesible. Importando archivos...";
+                        begin_import(result.folder, purpose == FolderPathPurpose::Keys ? 1U : 2U);
+                    }
+                } else if (result.cancelled) {
+                    configuration.path_entry_open = false;
+                    configuration.path_text.clear();
+                } else configuration.path_error = result.error.empty() ? L"No se pudo abrir la carpeta." : result.error;
+                dirty = true;
+            }
+            folder_path_cancelled = false;
+        }
+        if (folder_browser_future.valid() &&
+            folder_browser_future.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
+            FolderBrowserLoadResult result;
+            try { result = folder_browser_future.get(); }
+            catch (...) { result.error = L"No se pudo enumerar esta ubicacion."; }
+            if (folder_browser_worker.joinable()) folder_browser_worker.join();
+            folder_browser_control.reset();
+            if (!folder_browser_cancelled && configuration.browser_open) {
+                configuration.browser_loading = false;
+                configuration.browser_at_roots = result.at_roots;
+                configuration.browser_page = result.page;
+                configuration.browser_entries = std::move(result.entries);
+                configuration.browser_location = std::move(result.location);
+                configuration.browser_error = std::move(result.error);
+                configuration.browser_has_more = result.has_more;
+                if (result.cancelled) configuration.browser_error.clear();
+                const size_t row_count = configuration.browser_at_roots ? configuration.browser_entries.size() :
+                                         2 + configuration.browser_entries.size();
+                configuration.browser_selected = row_count ? std::min(configuration.browser_selected, row_count - 1) : 0;
+                dirty = true;
+            }
+            folder_browser_cancelled = false;
+        }
+        if (configuration.browser_open) {
+            if (configuration.browser_loading) {
+                actions = 0;
+            } else {
+                const size_t count = configuration.browser_at_roots ? configuration.browser_entries.size() :
+                                     2 + configuration.browser_entries.size();
+                if (count && (actions & Up))
+                    configuration.browser_selected = (configuration.browser_selected + count - 1) % count;
+                if (count && (actions & Down))
+                    configuration.browser_selected = (configuration.browser_selected + 1) % count;
+                if (actions & Left) page_folder_browser(false);
+                if (actions & Right) page_folder_browser(true);
+                if (actions & Play) activate_folder_browser_selection();
+                if (actions & (Up | Down)) dirty = true;
+                actions = 0;
+            }
+        }
+        if (configuration.path_entry_open) {
+            if (!configuration.path_resolving) {
+                if (actions & Up) move_folder_path_key(0, -1);
+                else if (actions & Down) move_folder_path_key(0, 1);
+                else if (actions & Left) move_folder_path_key(-1, 0);
+                else if (actions & Right) move_folder_path_key(1, 0);
+                if (actions & Play) activate_folder_path_key();
+            }
+            actions = 0;
+        }
         if (actions & Panel && !configuration.open) { settings = !settings; panel.keyboard.open = panel.keyboard.capturing = false; panel.expanded = false; dirty = true; }
         if (actions & AddFolder && !settings && !picker && !configuration.busy && !validation.valid()) {
             configuration.open = true; configuration.files = false; configuration.selected = 0;
             configuration.notice.clear(); refresh_setup(); dirty = true;
         }
-        if (configuration.open && !settings && !picker && !configuration.busy) {
+        if (configuration.open && !settings && !picker && !configuration.busy &&
+            !configuration.path_entry_open && !configuration.browser_open) {
             const auto count = ConfigurationRowCount(configuration);
             if (actions & Up) configuration.selected = (configuration.selected + count - 1) % count;
             if (actions & Down) configuration.selected = (configuration.selected + 1) % count;
@@ -471,22 +1241,44 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     if (configuration.selected == 0) { configuration.files = true; configuration.selected = 0; }
                     else { settings = true; return_to_configuration = true; }
                 } else if (loading || setup_future.valid()) configuration.notice = L"Espera a que termine la comprobacion de archivos.";
-                else if (configuration.selected >= 3) {
+                else if (configuration.selected >= 6) {
                     try {
-                        ForgetGameFolder(configuration.status.sources[configuration.selected - 3].token);
-                        configuration.notice = L"Carpeta quitada de la biblioteca. Tus juegos siguen en el USB.";
+                        ForgetGameFolder(configuration.status.sources[configuration.selected - 6].token);
+                        configuration.notice = L"Carpeta externa quitada de la biblioteca. Tus juegos siguen en su ubicacion.";
                         configuration.selected = 0; refresh_setup(); start_scan();
                     } catch (...) { configuration.notice = L"No se pudo quitar la carpeta."; }
+                } else if (configuration.selected == 1 || configuration.selected == 3 || configuration.selected == 5) {
+                    if (folder_path_future.valid()) {
+                        configuration.notice = L"La comprobacion anterior sigue en curso; espera a que termine.";
+                    } else {
+                        configuration.path_entry_open = true;
+                        configuration.path_resolving = false;
+                        configuration.path_purpose = configuration.selected == 1 ? FolderPathPurpose::Games :
+                            configuration.selected == 3 ? FolderPathPurpose::Keys : FolderPathPurpose::Firmware;
+                        configuration.path_text.clear();
+                        configuration.path_cursor = 0;
+                        configuration.path_key = 0;
+                        configuration.path_symbols = false;
+                        configuration.path_uppercase = false;
+                        configuration.path_error.clear();
+                        configuration.notice.clear();
+                    }
                 } else {
-                    picker_kind = static_cast<unsigned>(configuration.selected);
-                    try {
-                        winrt::Windows::Storage::Pickers::FolderPicker folder_picker;
-                        folder_picker.SuggestedStartLocation(winrt::Windows::Storage::Pickers::PickerLocationId::ComputerFolder);
-                        folder_picker.FileTypeFilter().Append(L"*");
-                        picker = folder_picker.PickSingleFolderAsync();
-                        configuration.notice = picker_kind == 0 ? L"Elige la carpeta de juegos." : picker_kind == 1 ?
-                            L"Elige la carpeta con prod.keys y, opcionalmente, title.keys." : L"Elige la carpeta de firmware extraido (.nca).";
-                    } catch (...) { configuration.notice = L"No se pudo abrir el selector de carpetas."; }
+                    picker_kind = static_cast<unsigned>(configuration.selected / 2);
+                    configuration.path_purpose = picker_kind == 0 ? FolderPathPurpose::Games :
+                        picker_kind == 1 ? FolderPathPurpose::Keys : FolderPathPurpose::Firmware;
+                    if (panel.xbox) {
+                        open_folder_browser();
+                    } else {
+                        try {
+                            winrt::Windows::Storage::Pickers::FolderPicker folder_picker;
+                            folder_picker.SuggestedStartLocation(winrt::Windows::Storage::Pickers::PickerLocationId::ComputerFolder);
+                            folder_picker.FileTypeFilter().Append(L"*");
+                            picker = folder_picker.PickSingleFolderAsync();
+                            configuration.notice = picker_kind == 0 ? L"Elige la carpeta de juegos." : picker_kind == 1 ?
+                                L"Elige la carpeta con prod.keys y, opcionalmente, title.keys." : L"Elige la carpeta de firmware extraido (.nca).";
+                        } catch (...) { configuration.notice = L"No se pudo abrir el selector de carpetas."; }
+                    }
                 }
                 dirty = true;
             }
@@ -502,9 +1294,20 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             if (!configuration.busy) refresh_setup();
             selected = std::min(selected, scan.entries.empty() ? 0 : scan.entries.size() - 1);
             notice = winrt::to_hstring(scan.error).c_str();
+            if (added_folder_pending) {
+                configuration.notice = scan.error.empty() ? L"Carpeta externa agregada a la biblioteca." :
+                    L"No se pudo completar el registro o la exploracion: " + std::wstring{winrt::to_hstring(scan.error)};
+                added_folder_pending = false;
+            }
             if (notice.empty() && !initial_notice.empty()) notice = winrt::to_hstring(initial_notice).c_str();
             initial_notice = {};
-            if (scan.limited) notice = L"Limite de exploracion alcanzado: 10000 entradas, 5 niveles.";
+            if (scan.limited) {
+                notice = L"Exploracion incompleta: se alcanzo un limite de fuentes, entradas o profundidad; pueden faltar juegos.";
+                if (!scan.error.empty()) {
+                    notice += L" ";
+                    notice += winrt::to_hstring(scan.error).c_str();
+                }
+            }
             dirty = true;
         }
         if (!auto_pick.empty() && !configuration.open && !loading && !picker && !validation.valid()) {
@@ -528,7 +1331,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             std::packaged_task<std::string()> task{[path = selected_path] {
                 winrt::init_apartment(winrt::apartment_type::multi_threaded);
                 struct Uninitialize { ~Uninitialize() { winrt::uninit_apartment(); } } guard;
-                if (!HasUsableHeaderKey() && !path.ends_with(".nro"))
+                if (!HasUsableHeaderKey() && !IsHomebrewNroPath(std::filesystem::path{path}))
                     return std::string{"Faltan tus claves. Abre Configuracion > Gestor de archivos > Importar claves."};
                 return IsStoragePath(path) ? CheckExternalGame(path) : std::string{};
             }};

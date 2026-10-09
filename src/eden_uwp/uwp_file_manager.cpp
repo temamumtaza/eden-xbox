@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: Copyright 2026 JulianDr14
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "eden_uwp/uwp_file_manager.h"
+#include "eden_uwp/uwp_async.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <climits>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Storage.AccessCache.h>
@@ -26,6 +29,7 @@ using namespace winrt::Windows::Storage;
 using winrt::Windows::Storage::AccessCache::StorageApplicationPermissions;
 constexpr unsigned PageSize = 64;
 constexpr unsigned MaxFirmwareFiles = 4096;
+std::mutex file_manager_mutex;
 std::wstring BrokerPath(std::filesystem::path path) {
     return path.make_preferred().wstring();
 }
@@ -51,6 +55,37 @@ bool RecoverDirectory(const std::filesystem::path& destination) {
         else std::filesystem::remove_all(previous);
     }
     return false;
+}
+bool IsImportStageName(std::wstring_view name, std::wstring_view destination_name) {
+    std::wstring prefix{destination_name};
+    prefix += L".import";
+    if (name == prefix) return true;
+    if (!name.starts_with(prefix) || name.size() <= prefix.size() + 3) return false;
+    const auto suffix = name.substr(prefix.size());
+    if (!suffix.starts_with(L" (") || suffix.back() != L')') return false;
+    const auto number = suffix.substr(2, suffix.size() - 3);
+    return !number.empty() && std::all_of(number.begin(), number.end(), [](wchar_t c) {
+        return c >= L'0' && c <= L'9';
+    });
+}
+void RemoveStaleImportStages(const std::filesystem::path& destination) {
+    RequireInternalDestination(destination);
+    const auto parent = destination.parent_path();
+    std::error_code error;
+    for (std::filesystem::directory_iterator it{parent, error}, end; !error && it != end; it.increment(error)) {
+        std::error_code type_error;
+        if (!it->is_directory(type_error) || type_error ||
+            !IsImportStageName(it->path().filename().wstring(), destination.filename().wstring()))
+            continue;
+        std::error_code remove_error;
+        std::filesystem::remove_all(it->path(), remove_error);
+        if (remove_error)
+            LOG_WARNING(Frontend, "File manager: stale import staging cleanup failed path={} error={}",
+                        it->path().string(), remove_error.message());
+    }
+    if (error)
+        LOG_WARNING(Frontend, "File manager: staging directory enumeration failed path={} error={}",
+                    parent.string(), error.message());
 }
 void PublishDirectory(StorageFolder stage, const std::filesystem::path& destination) {
     const auto previous = destination.parent_path() / (destination.filename().wstring() + L".previous");
@@ -95,15 +130,23 @@ bool HasUsableHeaderKey() {
 }
 
 FileSetupStatus ReadFileSetupStatus() {
+    std::lock_guard lock{file_manager_mutex};
     const auto keys = Common::FS::GetEdenPath(Common::FS::EdenPath::KeysDir);
     const bool restored_keys = RecoverDirectory(keys);
-    RecoverDirectory(FirmwarePath());
+    const auto firmware = FirmwarePath();
+    RecoverDirectory(firmware);
+    // Serialize with imports so only abandoned folders from a previous run are removed.
+    RemoveStaleImportStages(keys);
+    RemoveStaleImportStages(firmware);
     if (restored_keys) Core::Crypto::KeyManager::Instance().ReloadKeys();
     FileSetupStatus result;
     result.keys_ready = HasUsableHeaderKey();
     std::error_code error;
     for (std::filesystem::directory_iterator it{FirmwarePath(), error}, end; !error && it != end; it.increment(error)) {
-        if (it->is_regular_file(error) && it->path().extension() == ".nca") ++result.firmware_files;
+        auto extension = it->path().extension().wstring();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](wchar_t c) { return std::towlower(c); });
+        if (it->is_regular_file(error) && extension == L".nca") ++result.firmware_files;
     }
     for (const auto& entry : StorageApplicationPermissions::FutureAccessList().Entries()) {
         const auto token = winrt::to_string(entry.Token);
@@ -120,6 +163,7 @@ void ForgetGameFolder(std::string_view token) {
 
 std::string ImportSystemFiles(const StorageFolder& source, FileImport kind,
                              FileImportProgress& progress, std::stop_token stop) {
+    std::lock_guard lock{file_manager_mutex};
     StorageFolder stage{nullptr};
     try {
         const bool keys = kind == FileImport::Keys;
@@ -132,19 +176,21 @@ std::string ImportSystemFiles(const StorageFolder& source, FileImport kind,
                                          CreationCollisionOption::GenerateUniqueName).get();
         std::vector<StorageFile> files;
         if (keys) {
-            files.push_back(source.GetFileAsync(L"prod.keys").get());
-            if (auto title = source.TryGetItemAsync(L"title.keys").get()) files.push_back(title.as<StorageFile>());
+            files.push_back(AwaitStorageOperation(source.GetFileAsync(L"prod.keys"), stop));
+            if (auto title = AwaitStorageOperation(source.TryGetItemAsync(L"title.keys"), stop))
+                files.push_back(title.as<StorageFile>());
             // Preserve unrelated/generated key files in a complete staged directory.
             if (std::filesystem::exists(destination)) {
-                auto existing = StorageFolder::GetFolderFromPathAsync(BrokerPath(destination)).get();
-                for (const auto& file : existing.GetFilesAsync().get()) {
+                auto existing = AwaitStorageOperation(StorageFolder::GetFolderFromPathAsync(BrokerPath(destination)), stop);
+                for (const auto& file : AwaitStorageOperation(existing.GetFilesAsync(), stop)) {
                     if (file.Name() != L"prod.keys" && (files.size() == 1 || file.Name() != L"title.keys"))
-                        file.CopyAsync(stage, file.Name(), NameCollisionOption::FailIfExists).get();
+                        AwaitStorageOperation(file.CopyAsync(stage, file.Name(), NameCollisionOption::FailIfExists), stop);
                 }
             }
         } else {
             for (unsigned start = 0;; start += PageSize) {
-                auto page = source.GetFilesAsync(Search::CommonFileQuery::DefaultQuery, start, PageSize).get();
+                auto page = AwaitStorageOperation(
+                    source.GetFilesAsync(Search::CommonFileQuery::DefaultQuery, start, PageSize), stop);
                 for (const auto& file : page) {
                     std::wstring extension{file.FileType()};
                     std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) { return std::towlower(c); });
@@ -162,10 +208,11 @@ std::string ImportSystemFiles(const StorageFolder& source, FileImport kind,
         FileSys::RealVfsFilesystem vfs;
         for (const auto& file : files) {
             if (stop.stop_requested()) throw std::runtime_error("Importacion cancelada; se conserva lo anterior.");
-            const auto bytes = file.GetBasicPropertiesAsync().get().Size();
+            const auto bytes = AwaitStorageOperation(file.GetBasicPropertiesAsync(), stop).Size();
             if (keys && bytes > 4 * 1024 * 1024) throw std::runtime_error("Archivo de claves demasiado grande.");
-            auto copied = file.CopyAsync(stage, file.Name(), NameCollisionOption::FailIfExists).get();
-            if (copied.GetBasicPropertiesAsync().get().Size() != bytes) throw std::runtime_error("Copia incompleta.");
+            auto copied = AwaitStorageOperation(file.CopyAsync(stage, file.Name(), NameCollisionOption::FailIfExists), stop);
+            if (AwaitStorageOperation(copied.GetBasicPropertiesAsync(), stop).Size() != bytes)
+                throw std::runtime_error("Copia incompleta.");
             if (!keys) {
                 const auto path = std::filesystem::path{std::wstring{copied.Path()}};
                 const auto u8path = path.u8string();
@@ -191,6 +238,7 @@ std::string ImportSystemFiles(const StorageFolder& source, FileImport kind,
     } catch (const winrt::hresult_error& e) {
         LOG_ERROR(Frontend, "File manager: import failed HRESULT={:08X}", static_cast<unsigned>(e.code().value));
         if (stage) { try { stage.DeleteAsync().get(); } catch (...) {} }
+        if (stop.stop_requested()) return "Importacion cancelada; se conserva lo anterior.";
         return "No se pudo importar. Comprueba la carpeta, el espacio libre y la conexion del USB.";
     } catch (const std::exception& e) {
         if (stage) { try { stage.DeleteAsync().get(); } catch (...) {} }
@@ -245,6 +293,37 @@ bool RunFileManagerGate(const std::function<void(std::string)>& diagnostic) {
         if (!firmware_error.empty()) throw std::runtime_error(firmware_error);
         const auto before = ReadFileSetupStatus();
         require(before.keys_ready && before.firmware_files == required, "Setup status mismatch");
+
+        step = "case-insensitive firmware status";
+        const auto uppercase_nca = FirmwarePath() / "gate-case-check.NCA";
+        std::ofstream{uppercase_nca, std::ios::binary}.put('\0');
+        require(ReadFileSetupStatus().firmware_files == required + 1,
+                "Uppercase NCA extension was not counted");
+        std::filesystem::remove(uppercase_nca);
+        require(ReadFileSetupStatus().firmware_files == required,
+                "Firmware count did not recover after the extension check");
+
+        step = "staging cleanup";
+        const auto key_stage = fixture_path / "keys.import";
+        const auto key_collision_stage = fixture_path / "keys.import (2)";
+        const auto unrelated_key_folder = fixture_path / "keys.import-not-staging";
+        const auto firmware_parent = FirmwarePath().parent_path();
+        const auto firmware_stage = firmware_parent / "registered.import";
+        const auto firmware_collision_stage = firmware_parent / "registered.import (3)";
+        const auto unrelated_firmware_folder = firmware_parent / "registered.import-backup";
+        for (const auto& path : {key_stage, key_collision_stage, unrelated_key_folder,
+                                 firmware_stage, firmware_collision_stage, unrelated_firmware_folder})
+            std::filesystem::create_directories(path);
+        const auto after_cleanup = ReadFileSetupStatus();
+        require(after_cleanup.keys_ready && after_cleanup.firmware_files == required,
+                "Staging cleanup changed installed keys or firmware");
+        require(!std::filesystem::exists(key_stage) && !std::filesystem::exists(key_collision_stage) &&
+                !std::filesystem::exists(firmware_stage) && !std::filesystem::exists(firmware_collision_stage),
+                "Recognized abandoned import staging was not removed");
+        require(std::filesystem::exists(unrelated_key_folder) && std::filesystem::exists(unrelated_firmware_folder),
+                "Staging cleanup removed a similarly named unrelated folder");
+        ReadFileSetupStatus(); // Cleanup must be safe and idempotent.
+
         auto bad = fixture.CreateFolderAsync(L"invalid-keys").get();
         auto invalid = bad.CreateFileAsync(L"prod.keys").get();
         FileIO::WriteTextAsync(invalid, L"header_key=0000\n").get();

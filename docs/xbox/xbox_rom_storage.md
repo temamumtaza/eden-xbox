@@ -263,36 +263,51 @@ El gestor muestra estado, permite quitar fuentes de juegos sin borrar dumps y
 detiene metadatos antes de sustituir claves. Diseño, copia por broker, publicación
 recuperable, cancelación y gate en [xbox_frontend.md](xbox_frontend.md).
 
-## Acceso UNC/SMB y límites del picker (10 oct 2026)
+## Acceso UNC/SMB, USB y límites de autenticación (10 oct 2026)
 
-La VFS ya admite fuentes entregadas por `FolderPicker` y conservadas en
-`FutureAccessList`. Se añadió `privateNetworkClientServer` al manifiesto, junto a
-`internetClient`, como permiso necesario para ubicaciones UNC. Microsoft documenta
-ambas capacidades para UNC; el flujo de picker concede acceso solo a la ubicación
-que la persona selecciona. `broadFileSystemAccess` no es una alternativa en Xbox.
+En Xbox, el gestor usa un browser propio con `LocalFolder`, unidades visibles en
+`KnownFolders::RemovableDevices` y carpetas de `FutureAccessList`; en PC se conserva
+`FolderPicker`. El browser enumera subcarpetas por páginas de ocho y permite elegir la
+carpeta actual. El gestor también acepta una ruta absoluta: UNC se resuelve con
+`StorageFolder::GetFolderFromPathAsync`; una ruta de unidad se resuelve bajo
+`LocalFolder`, grants guardados, unidades expuestas y, al final, el broker WinRT. El
+manifiesto declara `privateNetworkClientServer`,
+`internetClient`, `removableStorage` y asociaciones `.nsp`, `.xci`, `.nro`, `.keys`
+y `.nca`. Microsoft documenta los requisitos generales de UNC/removable storage;
+esa documentación no garantiza estas APIs en Xbox Series. El browser no enumera
+Downloads arbitrarios ni carpetas privadas de otras apps. `broadFileSystemAccess` no
+es una alternativa en Xbox.
+
 Fuentes: [permisos de acceso a archivos](https://learn.microsoft.com/en-us/windows/apps/develop/files/file-access-permissions?redirectedfrom=MSDN),
 [capacidades](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations),
-[pickers](https://learn.microsoft.com/en-us/windows/uwp/files/quickstart-using-file-and-folder-pickers).
+[pickers](https://learn.microsoft.com/en-us/windows/uwp/files/quickstart-using-file-and-folder-pickers),
+[KnownFolders.RemovableDevices](https://learn.microsoft.com/en-us/uwp/api/windows.storage.knownfolders.removabledevices?view=winrt-28000).
 
-El manifiesto no monta shares, no añade un campo para escribir rutas UNC y no pide
-credenciales SMB. Si el picker de Xbox no presenta un share —o Windows deniega su
-autenticación— la app no puede descubrirlo ni saltarse el sandbox. Tampoco obtiene
-acceso a directorios privados de otras apps. Hasta superar un gate físico de Series,
-describir la función como acceso a carpetas seleccionables/autorizadas por el picker,
-no como acceso a cualquier ruta de Xbox.
+La resolución de rutas, la carga del browser, el scan de juegos y la copia de importación
+propagan la cancelación a la operación WinRT activa. La lectura de una ROM ya abierta y
+algunas consultas VFS todavía dependen de la respuesta del backend de Windows; no hay
+un timeout propio para un servidor lento o desconectado. `GetFolderFromPathAsync` no
+acepta nombre de usuario ni contraseña. No se implementa un cliente SMB propio ni una
+interfaz para guardar credenciales; un share protegido solo funciona si Windows/Xbox ya
+dispone de autenticación adecuada. `enterpriseAuthentication` aplica a credenciales de
+dominio y no se declara. No hay acceso a carpetas privadas de otras apps ni a namespaces
+`\\?\`/`\\.\`.
 
-Auditoría de `StorageDirectory`: `GetFile()` sigue heredado de `VfsDirectory` y
-construye su respuesta enumerando todos los archivos hermanos. Si la enumeración de
-una carpeta falla, el manejo de errores devuelve lo acumulado hasta ese punto y una
-búsqueda de un archivo concreto podría no encontrarlo; además, esta ruta hace trabajo
-extra en una carpeta SMB. El comportamiento ante un elemento individual sin permiso aún
-no está reproducido. También se omite silenciosamente el contenido que supere la
-profundidad de escaneo, sin activar el aviso de límite de la interfaz. Son riesgos
-que deben resolverse antes de prometer fiabilidad en carpetas SMB grandes o con permisos
-mixtos; aún no hay gate de desconexión/timeout de red.
+El paquete declara asociaciones porque el modelo de UNC/removable storage usa esas
+extensiones como allowlist. El frontend todavía no procesa activaciones de archivo;
+el flujo soportado es elegir o escribir la carpeta dentro de Eden. Hasta superar un
+gate físico, no afirmar que UNC ni el descubrimiento de USB funcionan en Series.
 
-Gate pendiente: en Series, seleccionar desde la UI un share UNC y un USB, confirmar
-que ambos aparecen en la biblioteca, reiniciar Eden y reabrirlos desde el token,
-leer un archivo grande sin copiarlo a LocalState, y medir desconexión/reconexión. La
-capacidad del manifiesto pasó solo parseo XML local; no demuestra que el picker de
-Xbox liste el share ni que el dispositivo permita autenticarse.
+Auditoría de `StorageDirectory`: `GetFile()` ahora resuelve el nombre directo con
+`StorageFolder::GetFileAsync`, sin enumerar todos los archivos hermanos. Los fallos
+de enumeración VFS se registran; los resultados que alcanzan `MaxEntries` avisan en
+el log; y las carpetas más profundas marcan el scan como incompleto mientras se
+continúan los hermanos. El frontend muestra un aviso genérico de límites y conserva
+los errores del scan. Aún no hay gate para desconexión durante lectura, un servidor
+SMB lento ni carpetas con permisos mixtos.
+
+Gate pendiente: en Series, agregar con mando una ruta UNC y una unidad USB, confirmar
+que ambas aparecen en la biblioteca, reiniciar Eden y reabrirlas desde
+`FutureAccessList`, leer un archivo grande sin copiarlo a LocalState, y medir
+cancelación/desconexión y reconexión. Un parseo o build del manifiesto no demuestra
+que las APIs enumeren la unidad en Xbox ni que la consola pueda autenticarse al share.

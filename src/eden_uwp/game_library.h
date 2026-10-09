@@ -10,6 +10,13 @@
 #include <vector>
 
 namespace EdenXbox {
+inline bool IsHomebrewNroPath(const std::filesystem::path& path) {
+    auto extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".nro";
+}
+
 struct LibraryEntry {
     std::filesystem::path relative_path;
     std::wstring name;
@@ -57,7 +64,7 @@ inline LibraryScan ScanGameLibrary(const std::filesystem::path& root,
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if (ext != ".nsp" && ext != ".xci" && ext != ".nro") continue;
         result.entries.push_back({it->path().lexically_relative(root),
-                                  it->path().stem().wstring()});
+                                  it->path().stem().wstring(), {}, {}, false, {}, {}});
     }
     if (ec) result.error = ec.message();
     std::sort(result.entries.begin(), result.entries.end(), [](const auto& a, const auto& b) {

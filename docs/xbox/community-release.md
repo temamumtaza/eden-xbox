@@ -17,9 +17,10 @@ Nintendo keys, firmware, or game dumps in source control or release assets.
    certificate, Microsoft VCLibs package, checksums, build metadata, bilingual user guides, and
    license. It contains no private key or user-supplied emulator data.
 4. Review the draft tag, target commit, release notes, files, and checksum. Install the package on
-   an Xbox in Developer Mode and perform a smoke test before publishing. For an external-storage
-   release, test the Xbox folder picker with the storage types the release notes claim to support.
-   A PC AppContainer test does not verify Xbox USB permissions, SMB/network visibility or
+   an Xbox in Developer Mode and perform a smoke test before publishing. For external storage,
+   test Eden's Xbox browser with a real USB device and test a typed UNC path against the intended
+   SMB server; verify a large-file read and that the grants survive restarting Eden. A PC
+   AppContainer test does not verify Xbox USB permissions, SMB/network visibility or
    authentication, or access to private app folders. Publishing is a separate maintainer action
    from the Releases page.
 
@@ -48,6 +49,7 @@ The single ZIP asset is named `EdenXbox-<tag>.zip` and contains:
 
 The bilingual guides explain Dev Mode, local Device Portal installation, the app's exact LocalState
 folders, firmware ZIP extraction during upload, and how users import their own keys, firmware, and
-games. External game folders are selected through the Xbox system folder picker and persisted with
-the permission Windows grants. The picker can access only locations it exposes and authorizes; do
-not advertise arbitrary Xbox paths or SMB support as verified until tested on Xbox hardware.
+games. On Xbox, Eden provides a custom browser for its LocalFolder, removable volumes exposed by
+Windows, and saved grants, plus a manual absolute drive/UNC path entry. It persists selected folder
+grants and reads games in place. These routes can open only locations Windows exposes and authorizes;
+do not advertise arbitrary Xbox paths or USB/SMB support as verified until tested on Xbox hardware.

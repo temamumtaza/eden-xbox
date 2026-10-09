@@ -17,6 +17,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Antarmuka aplikasi pada build saat ini masih berbahasa Spanyol; nama menu di panduan mengikuti label yang muncul di Xbox.
 
+**Batas platform:** Eden mengemulasikan Nintendo Switch, bukan Wii. Pustaka tidak memindai dump Wii `.iso`/`.wbfs`; format yang dikenali saat ini adalah dump Switch `.nsp`/`.xci` dan aplikasi homebrew `.nro`. *Super Mario Galaxy 2* juga memiliki edisi Switch. Nama game saja tidak menentukan platform dump, dan kompatibilitas edisi Switch pada build Xbox ini belum diverifikasi.
+
 ## Sumber repositori
 
 Repo ini adalah fork komunitas tidak resmi dari [JulianDr14/eden-xbox](https://github.com/JulianDr14/eden-xbox), repo sumber port Xbox. Proyek utama Eden dan sumber upstream-nya adalah [eden-emu/eden](https://git.eden-emu.dev/eden-emu/eden). Repo ini memelihara port Xbox, panduan Developer Mode, dan rilis komunitas; ini bukan kanal rilis resmi proyek Eden.
@@ -34,7 +36,7 @@ Jika pemasangan gagal karena paket tidak tepercaya, pastikan sertifikat dari ZIP
 
 ## Siapkan keys, firmware, dan game milikmu
 
-Gunakan browser Device Portal untuk menaruh berkas di penyimpanan Eden. Pada **File Explorer**, buka **User Folders → LocalAppData → paket Eden → LocalState**. Nama paket bisa berbeda menurut versi; pilih paket Eden yang terpasang. Folder berikut adalah lokasi data yang dibaca Eden, bukan folder sementara. Keys dan firmware juga bisa diimpor lewat **Configuración → Gestor de archivos** jika folder sumbernya tersedia di pemilih folder Xbox.
+Gunakan browser Device Portal untuk menaruh berkas di penyimpanan Eden. Pada **File Explorer**, buka **User Folders → LocalAppData → paket Eden → LocalState**. Nama paket bisa berbeda menurut versi; pilih paket Eden yang terpasang. Folder berikut adalah lokasi data yang dibaca Eden, bukan folder sementara. Keys dan firmware juga bisa diimpor lewat **Configuración → Gestor de archivos** jika browser Eden atau jalur absolut yang diizinkan Windows dapat membuka folder sumbernya.
 
 Di dalam `LocalState`, buat folder yang belum ada dengan **New Folder** hingga susunannya seperti ini:
 
@@ -64,11 +66,11 @@ Ada dua cara:
 ### Pasang firmware ZIP
 
 1. Di Device Portal, buka `LocalState/eden/nand/system/Contents/registered/`, tekan **Upload**, lalu pilih ZIP firmware hasil dump milikmu.
-2. Saat browser menawarkan opsi untuk mengekstrak ZIP, pilih atau centang **Extract** / **Extract after upload**. Tunggu sampai selesai.
+2. Jika dialog upload menampilkan opsi ekstraksi, pilih atau centang **Extract** / **Extract after upload**. Tunggu sampai selesai.
 3. Pastikan berkas `.nca` berada langsung di dalam folder `registered`. Jika ZIP membuat folder tambahan, pindahkan berkas `.nca` ke `registered`.
 4. Pastikan keys sudah ada sebelum firmware digunakan.
 
-Opsi **Extract** dilakukan oleh File Explorer Device Portal saat upload ZIP; Eden membaca file hasil ekstraksi dari folder standar di atas. Microsoft mendokumentasikan parameter ekstraksi untuk upload berkas melalui [API Device Portal](https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/device-portal-api-core).
+API upload Device Portal mendukung parameter `extract=true`, tetapi tampilan checkbox di File Explorer portal dapat berbeda menurut versi dan belum diverifikasi pada semua konsol Xbox. Eden membaca file hasil ekstraksi dari folder standar di atas. Jika UI portal tidak menawarkan ekstraksi, ekstrak ZIP di komputer lalu unggah file `.nca` ke folder `registered`, atau gunakan impor firmware Eden di bawah.
 
 Alternatifnya, ekstrak ZIP di komputer lebih dulu, lalu di Eden pilih **Configuración → Gestor de archivos → Importar firmware de tu consola** dan pilih folder yang berisi file `.nca` hasil ekstrak secara langsung. Impor firmware memerlukan keys yang valid.
 
@@ -77,9 +79,11 @@ Alternatifnya, ekstrak ZIP di komputer lebih dulu, lalu di Eden pilih **Configur
 Kamu bisa memakai penyimpanan internal atau lokasi eksternal:
 
 - **Penyimpanan internal:** unggah dump game milikmu ke `LocalState/games/` lewat File Explorer Device Portal.
-- **USB atau folder jaringan:** sambungkan USB, atau siapkan lokasi jaringan agar Xbox dapat melihatnya. Di Eden buka **Configuración → Gestor de archivos → Agregar carpeta de juegos**, lalu pilih folder berisi game di pemilih folder Xbox. Eden menyimpan izin folder yang diberikan Windows dan membaca game dari sana tanpa menyalin dump ke `LocalState`. Folder harus tetap tersedia dan diizinkan saat Eden mengaksesnya.
+- **USB atau folder jaringan:** di Eden buka **Configuración → Gestor de archivos**. Pada Xbox, **Buscar carpeta de juegos** membuka browser Eden untuk penyimpanan internal Eden, removable volume yang diekspos Windows, dan folder dengan izin tersimpan; di PC, pilihan itu memakai pemilih folder Windows. **Escribir ruta de juegos** untuk memasukkan jalur absolut seperti `D:\Juegos` atau `\\servidor\share\Juegos`. Jalur USB harus memakai huruf drive yang ditampilkan Windows; jalur SMB harus menunjuk share dan folder yang bisa dibuka Windows. Eden menyimpan izin folder yang diberikan Windows dan membaca game dari sana tanpa menyalin dump ke `LocalState`.
 
-> Pemilih folder hanya memberi akses ke lokasi yang ditampilkan dan diizinkan Windows. Folder SMB/jaringan hanya bisa dipakai jika tersedia di pemilih tersebut dan Xbox dapat membukanya; visibilitas jaringan, autentikasi, dan perilaku pada perangkat Xbox belum diverifikasi. Eden tidak dapat melewati sandbox Windows untuk membuka sembarang folder privat aplikasi atau lokasi yang tidak diberikan oleh sistem. Jika lokasi eksternal tidak muncul, gunakan `LocalState/games/` melalui Device Portal.
+> Di Xbox, browser Eden hanya menampilkan penyimpanan internal Eden, removable volume yang diekspos Windows, dan folder dengan izin tersimpan; browser tidak dapat membuka sembarang Downloads atau folder privat aplikasi lain. Jalur USB/SMB tetap bergantung pada lokasi yang diizinkan Windows. Eden tidak menampilkan dialog login SMB dan tidak menyimpan kredensial. Share dengan autentikasi domain belum didukung karena paket tidak mendeklarasikan `enterpriseAuthentication`; akses SMB lainnya tetap bergantung pada izin Windows/Xbox. Perilaku `RemovableDevices`, UNC, dan pembacaan file pada perangkat Xbox masih perlu diuji. Jika lokasi eksternal tidak bisa dibuka, gunakan `LocalState/games/` melalui Device Portal.
+
+Asosiasi tipe berkas pada paket diperlukan Windows untuk membatasi akses removable storage dan UNC ke `.nsp`, `.xci`, `.nro`, `.keys`, serta `.nca`. Gunakan alur folder di Eden untuk menambahkan game atau mengimpor file; membuka satu berkas langsung dari aplikasi lain belum didukung.
 
 Pencarian eksternal mengenali `.nsp`, `.xci`, dan `.nro`, hingga 10.000 entri. Batas kedalaman menghitung folder yang dipilih sebagai tingkat pertama; simpan file di folder itu atau sampai empat subfolder di bawahnya.
 
@@ -92,7 +96,7 @@ Gunakan hanya `prod.keys`, `title.keys`, firmware, dan dump game yang kamu buat 
 ## Pembaruan dan bantuan
 
 - Pasang versi baru di atas versi lama menggunakan sertifikat rilis yang sama. Jangan menghapus Eden lebih dulu; data aplikasi biasanya dipertahankan saat pembaruan.
-- Jika game belum muncul, tekan **Menu** untuk memperbarui pustaka. Untuk penyimpanan internal, pastikan file ada di `LocalState/games/`; untuk eksternal, pastikan drive/lokasi masih tersedia dan tambahkan lagi lewat **Configuración → Gestor de archivos → Agregar carpeta de juegos**.
+- Jika game belum muncul, tekan **Menu** untuk memperbarui pustaka. Untuk penyimpanan internal, pastikan file ada di `LocalState/games/`; untuk eksternal, pastikan drive/lokasi masih tersedia lalu pilih **Buscar carpeta de juegos** atau **Escribir ruta de juegos** di **Configuración → Gestor de archivos**.
 - Jika game berada lebih dari empat subfolder di bawah folder yang dipilih atau hasil pemindaian melebihi 10.000 entri, pilih folder yang lebih dekat ke game atau kurangi isi folder yang dipindai.
 - Jika keys belum terbaca, pastikan nama file tepat `prod.keys` dan berada langsung di `LocalState/eden/keys/`, lalu jalankan ulang Eden.
 - Jika firmware belum terbaca, pastikan ZIP diekstrak oleh browser Device Portal dan file `.nca` berada langsung di `LocalState/eden/nand/system/Contents/registered/`.
