@@ -17,6 +17,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 The current app interface is still in Spanish. This guide shows the Spanish menu labels as they appear on Xbox.
 
+## Source repositories
+
+This repository is an unofficial community fork of [JulianDr14/eden-xbox](https://github.com/JulianDr14/eden-xbox), the Xbox port source repository. The main Eden project and upstream source are [eden-emu/eden](https://git.eden-emu.dev/eden-emu/eden). This repo maintains the Xbox port, Developer Mode guide, and community releases; it is not the official Eden project's release channel.
+
 ## Download and install
 
 1. Enable **Developer Mode** on your Xbox. Connect the Xbox and your computer/phone to the same local network.

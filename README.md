@@ -17,6 +17,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Antarmuka aplikasi pada build saat ini masih berbahasa Spanyol; nama menu di panduan mengikuti label yang muncul di Xbox.
 
+## Sumber repositori
+
+Repo ini adalah fork komunitas tidak resmi dari [JulianDr14/eden-xbox](https://github.com/JulianDr14/eden-xbox), repo sumber port Xbox. Proyek utama Eden dan sumber upstream-nya adalah [eden-emu/eden](https://git.eden-emu.dev/eden-emu/eden). Repo ini memelihara port Xbox, panduan Developer Mode, dan rilis komunitas; ini bukan kanal rilis resmi proyek Eden.
+
 ## Unduh dan pasang
 
 1. Aktifkan **Developer Mode** di Xbox dan sambungkan Xbox serta komputer/ponsel ke jaringan lokal yang sama.
