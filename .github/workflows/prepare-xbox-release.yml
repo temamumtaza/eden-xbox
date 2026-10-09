@@ -151,6 +151,11 @@ jobs:
           follow \`README.en.md\` inside it. Game compatibility is
           still in development; one Xbox Series S smoke test of Wild West Crops was reported to work.
           The package contains no Nintendo keys, firmware, or games.
+          External game folders are limited to locations exposed and authorized by the Xbox system
+          picker. This package declares private-network access for local SMB shares, but SMB
+          discovery/authentication on Xbox has not been tested; it adds no UNC path entry or access
+          to private folders owned by other apps. The scanner is limited to 10,000 entries and four
+          nested folder levels.
 
           ## Bahasa Indonesia
           Preview komunitas untuk Xbox Series X|S Developer Mode. Rilis ini ditandatangani dan divalidasi
@@ -160,6 +165,10 @@ jobs:
           ikuti \`README.md\` di dalamnya. Kompatibilitas game masih dalam
           pengembangan; satu uji coba Wild West Crops pada Xbox Series S dilaporkan berjalan.
           Paket ini tidak menyertakan keys, firmware, atau game Nintendo.
+          Folder game eksternal dibatasi pada lokasi yang ditampilkan dan diizinkan pemilih folder
+          Xbox. Paket ini mendeklarasikan izin jaringan privat untuk SMB lokal, tetapi pencarian
+          share dan autentikasinya di Xbox belum diuji; tidak ada input jalur UNC atau akses ke
+          folder privat aplikasi lain. Scanner dibatasi 10.000 entri dan empat subfolder bertingkat.
 
           Build evidence: ${BUILD_RUN_URL}
           EOF
