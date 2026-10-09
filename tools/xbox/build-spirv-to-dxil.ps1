@@ -6,13 +6,14 @@
 #
 #   powershell -ExecutionPolicy Bypass -File tools\xbox\build-spirv-to-dxil.ps1
 #
-# Needs Python 3 on PATH and Visual Studio with the C++ x64 toolset and the UWP (Store CRT)
+# Needs 7-Zip, Python 3 on PATH and Visual Studio with the C++ x64 toolset and the UWP (Store CRT)
 # component. Mesa sources, the venv and the build tree live in -WorkDir, outside the repo; the DLL is
 # a build artifact and is never committed.
 
 param(
     [string] $WorkDir = (Join-Path $PSScriptRoot "..\..\..\mesa-build"),
     [string] $MesaVersion = "26.2.3",
+    [string] $MesaSha256 = "1628058a8d2c0615975de5a15ab7bbb9638c50000b5bed9456ff423ea034a81f",
     # Wipe and reconfigure the build tree (after changing options or the Mesa version).
     [switch] $Reconfigure
 )
@@ -31,19 +32,77 @@ if (-not (Test-Path (Join-Path $src "meson.build"))) {
         Write-Host "downloading Mesa $MesaVersion ..."
         Invoke-WebRequest "https://archive.mesa3d.org/mesa-$MesaVersion.tar.xz" -OutFile $tarball
     }
-    Write-Host "extracting $tarball ..."
-    # tar reports errors for the few symlinks in the tarball (CI files, not needed here): the check
-    # below is what decides whether extraction worked.
-    & tar.exe -xf $tarball -C $WorkDir 2>$null
-    if (-not (Test-Path (Join-Path $src "meson.build"))) { throw "extracting Mesa failed" }
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tarball).Hash.ToLowerInvariant()
+    if ($actualHash -ne $MesaSha256.ToLowerInvariant()) {
+        throw "Mesa $MesaVersion archive SHA-256 mismatch: expected $MesaSha256, got $actualHash"
+    }
+    $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    if (-not $sevenZip) {
+        $sevenZipPath = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+        if (Test-Path $sevenZipPath) { $sevenZip = Get-Command $sevenZipPath }
+    }
+    if (-not $sevenZip) { throw "7-Zip is required to extract the Mesa source archive" }
+
+    # Expand XZ and TAR separately. Windows tar.exe can spend an excessive amount of time writing
+    # Mesa's thousands of small source files on hosted runners; 7-Zip handles both archive layers.
+    $stage = Join-Path $WorkDir ".mesa-$MesaVersion-extract"
+    if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    New-Item -ItemType Directory -Force $stage | Out-Null
+    try {
+        Write-Host "decompressing Mesa $MesaVersion ..."
+        & $sevenZip.Source x -y -bso0 -bsp1 "-o$stage" $tarball
+        if ($LASTEXITCODE -gt 1) { throw "decompressing Mesa archive failed (7-Zip exit $LASTEXITCODE)" }
+        $mesaTar = Join-Path $stage "mesa-$MesaVersion.tar"
+        if (-not (Test-Path $mesaTar)) { throw "7-Zip did not produce the expected Mesa TAR archive" }
+
+        Write-Host "extracting Mesa source files ..."
+        $extractErrorsPath = Join-Path $stage "extract-errors.txt"
+        & $sevenZip.Source x -y -bso0 -bsp1 "-o$WorkDir" $mesaTar 2> $extractErrorsPath
+        $extractExitCode = $LASTEXITCODE
+        $extractErrors = @(Get-Content -LiteralPath $extractErrorsPath -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match "ERROR:" })
+        $linkWarnings = @($extractErrors | Where-Object { $_ -match "ERROR: Dangerous link path was ignored :" })
+        $unexpectedErrors = @($extractErrors | Where-Object { $_ -notmatch "ERROR: Dangerous link path was ignored :" })
+        if ($unexpectedErrors.Count -gt 0) {
+            throw "Mesa extraction reported unexpected 7-Zip errors: $($unexpectedErrors -join '; ')"
+        }
+        if ($extractExitCode -ne 0 -and ($extractExitCode -ne 2 -or $linkWarnings.Count -eq 0)) {
+            throw "extracting Mesa TAR archive failed (7-Zip exit $extractExitCode)"
+        }
+        if ($linkWarnings.Count -gt 0) {
+            Write-Host "7-Zip skipped $($linkWarnings.Count) unsafe Mesa source symlinks."
+        }
+        if (-not (Test-Path (Join-Path $src "meson.build"))) { throw "extracting Mesa failed" }
+        foreach ($required in @(
+            "src\compiler\nir\meson.build",
+            "src\microsoft\spirv_to_dxil\meson.build"
+        )) {
+            if (-not (Test-Path (Join-Path $src $required))) { throw "Mesa archive is missing $required" }
+        }
+    }
+    finally {
+        if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    }
 }
 
 # --- Local patches (idempotent) ---------------------------------------------------------------
 function Patch-File([string] $rel, [string] $old, [string] $new) {
     $path = Join-Path $src $rel
     $text = [IO.File]::ReadAllText($path)
-    if ($text.Contains($new)) { return }
-    if (-not $text.Contains($old)) { throw "$rel changed upstream: the patch no longer applies" }
+    $newFirst = $text.IndexOf($new, [StringComparison]::Ordinal)
+    if ($newFirst -ge 0) {
+        $outsideReplacement = $text.Remove($newFirst, $new.Length)
+        if ($text.IndexOf($new, $newFirst + $new.Length, [StringComparison]::Ordinal) -ge 0 -or
+            $outsideReplacement.IndexOf($old, [StringComparison]::Ordinal) -ge 0) {
+            throw "$rel changed upstream: the patch state is ambiguous"
+        }
+        return
+    }
+    $first = $text.IndexOf($old, [StringComparison]::Ordinal)
+    if ($first -lt 0) { throw "$rel changed upstream: the patch no longer applies" }
+    if ($text.IndexOf($old, $first + $old.Length, [StringComparison]::Ordinal) -ge 0) {
+        throw "$rel changed upstream: the patch matched more than once"
+    }
     [IO.File]::WriteAllText($path, $text.Replace($old, $new))
     Write-Host "patched  : $rel"
 }
@@ -77,7 +136,9 @@ Patch-File "src\microsoft\spirv_to_dxil\meson.build" `
 if (-not (Test-Path (Join-Path $venv "Scripts\meson.exe"))) {
     Write-Host "creating the meson venv ..."
     & python -m venv $venv
-    & (Join-Path $venv "Scripts\pip.exe") install --quiet meson mako pyyaml packaging
+    if ($LASTEXITCODE) { throw "creating the meson venv failed" }
+    & (Join-Path $venv "Scripts\pip.exe") install --quiet `
+        meson==1.9.1 mako==1.3.10 pyyaml==6.0.3 packaging==25.0
     if ($LASTEXITCODE) { throw "pip install failed" }
 }
 
@@ -89,11 +150,19 @@ $vsRoot = & vswhere -latest -products * -requires Microsoft.VisualStudio.Compone
 if (-not $vsRoot) { throw "no Visual Studio instance with the C++ toolset was found" }
 $env:VSLANG = "1033"
 $vcvars = Join-Path $vsRoot "VC\Auxiliary\Build\vcvarsall.bat"
-foreach ($line in (& cmd.exe /c "`"$vcvars`" x64 >nul && set")) {
+$vcvarsArgs = "x64"
+if ($env:EDEN_WINDOWS_SDK_VERSION) { $vcvarsArgs += " $env:EDEN_WINDOWS_SDK_VERSION" }
+foreach ($line in (& cmd.exe /c "`"$vcvars`" $vcvarsArgs >nul && set")) {
     if ($line -match "^([^=]+)=(.*)$") { Set-Item "env:$($Matches[1])" $Matches[2] }
 }
 $env:PATH = "$vsRoot\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;$venv\Scripts;$env:PATH"
 if (-not $env:VCToolsInstallDir) { throw "vcvarsall x64 failed" }
+if ($env:EDEN_WINDOWS_SDK_VERSION) {
+    $selectedSdk = $env:WindowsSDKVersion.TrimEnd('\')
+    if ($selectedSdk -ne $env:EDEN_WINDOWS_SDK_VERSION) {
+        throw "vcvarsall selected Windows SDK $selectedSdk instead of $env:EDEN_WINDOWS_SDK_VERSION"
+    }
+}
 
 # --- Configure ------------------------------------------------------------------------------
 $storeLib = (Join-Path $env:VCToolsInstallDir "lib\x64\store").Replace("\", "/")

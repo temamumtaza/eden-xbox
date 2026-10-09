@@ -1,114 +1,37 @@
-# Building Eden's core stack for the Xbox UWP / AppContainer target
+# Building Eden for Xbox UWP
 
-This is the **Phase 2** build target: it compiles Eden's runtime libraries
-(`common`, `core`, `dynarmic`, `video_core`, `audio_core`, `hid_core`, `network`,
-`shader_recompiler`) for the **UWP/WindowsStore (AppContainer)** toolchain — the
-console-side target. Desktop frontends (Qt, the CLI, room server, cubeb, libusb,
-web services, OpenGL) are turned off, and `dynarmic` builds in its W^X +
-`Virtual*FromApp` mode for the sandbox.
+This branch builds the current Eden UWP frontend and its native Direct3D 12 renderer for Xbox Series X|S Developer Mode. The earlier Phase 2 headless-boot description is historical and no longer describes the package produced here.
 
-It is **headless**: the Null renderer (`video_core/renderer_null/`) is selected at
-runtime, so no GPU device is created at boot (Vulkan stays compiled). This is the
-build CORE's JIT/memory work and the eventual headless-boot frontend validate against.
+## Build from macOS
 
-> Status: the full core stack **compiles and links** for this target today (store
-> CRT, `CMAKE_SYSTEM_NAME=WindowsStore`). Producing a runnable `.appx` (AppContainer
-> link + `codeGeneration` manifest) and the headless-boot frontend are the follow-on
-> steps toward GATE 2.
+Use GitHub Actions; no local Windows installation or VM is needed. Open Actions in the personal fork, choose Build Eden Xbox, and run it on the xbox branch. Leave Source ref blank for the current branch tip, or provide a commit SHA from this fork to reproduce or roll back source. The workflow downloads dependencies, configures the UWP toolchain, builds Eden and Mesa's SPIR-V-to-DXIL runtime, signs and validates the APPX, and publishes a 30-day install artifact.
 
-## Prerequisites
+The short install steps are in [README-macos.md](../../README-macos.md); signing, cache, rollback, and scheduled upstream maintenance are in [ci_macos_maintenance.md](ci_macos_maintenance.md).
 
-- Visual Studio 2022 with the **"C++ (v143) Universal Windows Platform tools"**
-  component (`Microsoft.VisualStudio.ComponentGroup.UWP.VC`) and a Windows 10/11 SDK.
-- CMake ≥ 3.25 and Ninja (both ship with VS 2022 under
-  `Common7/IDE/CommonExtensions/Microsoft/CMake/`).
-- **Native Windows perl + nasm** (e.g. `winget install StrawberryPerl.StrawberryPerl`
-  and `winget install NASM.NASM`). This target builds OpenSSL **from source** (see the
-  OpenSSL note below); OpenSSL's MSVC Configure needs a native perl (MSYS/git perl
-  mangles paths) and nasm for its asm. Put `C:\Strawberry\perl\bin` on PATH **before**
-  any MSYS perl, and **do not** add `C:\Strawberry\c\bin` (it bundles an old CMake that
-  shadows the VS one).
-- **`glslangValidator` on PATH.** `video_core/host_shaders` compiles its GLSL to SPIR-V at
-  configure time, and Vulkan stays compiled in this preset, so the configure hard-fails without
-  it. The Vulkan SDK provides it; so do the standalone glslang release archives, which are far
-  smaller (the Vulkan *headers* come from CPM, so the SDK is not otherwise needed). Note that
-  recent glslang releases ship only `glslang.exe` — upstream stopped shipping the
-  `glslangValidator` name that `find_program` looks for, so copy it alongside under that name,
-  exactly as the Vulkan SDK does.
+## Windows toolchain used by CI
 
-### Shortcut
+The hosted Windows 2022 runner uses Visual Studio 2022 with the v143 x64 UWP tools, Windows SDK 10.0.26100.0, Store CRT, CMake 3.31 or newer, Ninja, native Strawberry Perl, NASM, Python 3, and glslangValidator 16.6.0. SDK 26100 supplies the D3D12 feature declarations used by the current renderer; its runtime feature queries fall back when the Xbox OS does not expose an optional feature. The workflow checks the selected SDK and Store CRT before configuration. The SDK supplies MakeAppx, SignTool, and dxil.dll; the UWP Extension SDK supplies Microsoft.VCLibs.x64.14.00.appx.
 
-[`tools/xbox/build-env.bat`](../../tools/xbox/build-env.bat) does the whole environment setup below
-in one step and then **verifies** it, which matters because every way of getting it wrong fails
-silently:
+The source CMakeLists requires CMake 3.31. The uwp-x64 preset selects WindowsStore, Release, UWP AppContainer Dynarmic settings, and the Xbox-specific frontend options. It does not use the old null-renderer-only build description.
 
-```
-tools\xbox\build-env.bat cmake --preset uwp-x64
-tools\xbox\build-env.bat cmake --build --preset uwp-x64 --target eden-uwp
-```
+## Optional local Windows build
 
-Run it from **cmd or PowerShell**, not Git Bash. With no arguments it leaves an interactive shell
-with the environment set. The rest of this section explains what it does and why, which is worth
-reading when something goes wrong.
+A local Windows build is useful for development but is not required for release. From cmd.exe at the repository root, set the requested SDK and invoke the checked environment wrapper:
 
-## Why Ninja (not the Visual Studio generator)
+    set EDEN_WINDOWS_SDK_VERSION=10.0.26100.0
+    tools\xbox\build-env.bat cmake --preset uwp-x64 -DCMAKE_SYSTEM_VERSION=10.0.26100.0
+    tools\xbox\build-env.bat cmake --build --preset uwp-x64 --target eden-uwp
 
-We use **Ninja**, not `-G "Visual Studio 17 2022"`, on purpose: the VS generator
-queries the VS Installer for a registered instance, which fails if the install is
-flagged incomplete. Ninja just uses the `cl.exe`/`link.exe` on `PATH` — so it only
-needs the **UWP VC environment**, set by `vcvarsall.bat x64 uwp`. That environment
-points `INCLUDE`/`LIB` at the **Store CRT** and is what makes this a UWP build.
+The wrapper selects Visual Studio's UWP x64 Store CRT, applies the selected SDK, and checks that the environment did not silently fall back to desktop CRT. Use cmd.exe or PowerShell, not Git Bash. If the project root is a clean checkout without an SDK pin, set EDEN_WINDOWS_SDK_VERSION before invoking it.
 
-## Configure + build
+Build Mesa's shader translator outside the repository with PowerShell:
 
-Set up a **UWP VC environment** and make sure CMake + Ninja are on `PATH`, then use
-the preset. From `cmd` at the repo root (adjust the VS edition/path as needed):
+    powershell -ExecutionPolicy Bypass -File tools\xbox\build-spirv-to-dxil.ps1
 
-```bat
-set "VSROOT=C:\Program Files\Microsoft Visual Studio\2022\Community"
-REM vcvarsall calls vswhere.exe bare to resolve the instance - it must be on PATH,
-REM or vcvarsall silently FALLS BACK to a desktop x64 (non-Store-CRT) environment.
-set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"
-call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x64 uwp
-set "PATH=%VSROOT%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%VSROOT%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%PATH%"
+The script pins the Mesa archive hash and its Python build tools. Mesa and its DLL stay in the sibling mesa-build directory and are never committed. The strict CI package fails if either spirv_to_dxil.dll or the matching Windows SDK dxil.dll is absent.
 
-cmake --preset uwp-x64
-cmake --build --preset uwp-x64 --target core
-```
+## Output and runtime requirements
 
-Three env steps, all required:
-- **vswhere on PATH** (first line) - `vcvarsall x64 uwp` shells out to `vswhere.exe`
-  bare; without it on PATH it can't find the VS instance and quietly falls back to a
-  desktop `x64` env (no Store CRT). Verify with: `echo %LIB% | findstr x64\store`.
-- **`vcvarsall x64 uwp`** - points the compiler at the **Store CRT** (`VSCMD_ARG_app_plat=UWP`).
-- **CMake + Ninja on PATH** - a plain `vcvarsall` shell does not add them, and
-  `cmake --preset` needs Ninja discoverable.
+The signed install artifact contains eden-xbox.appx, eden-xbox.cer, Microsoft.VCLibs.x64.14.00.appx, SHA256SUMS.txt, and build-metadata.json. The APPX contains the app, the Mesa translation DLL, dxil.dll, and the runtime DLLs emitted next to eden-uwp.exe. The manifest targets x64 Windows.Universal, declares codeGeneration and Microsoft.VCLibs.140.00, and keeps the publisher aligned with the development signing certificate.
 
-CI does the same three steps.
-
-`--target core` pulls the whole runtime graph (common, dynarmic, video_core, etc.).
-Scope to a single library with `--target dynarmic` / `--target common` while iterating.
-
-The `uwp-x64` preset (see `CMakePresets.json`) pins the option set, the WindowsStore
-system name, and `DYNARMIC_UWP_APPCONTAINER=ON` (which forces dynarmic's W^X path and
-routes its JIT alloc/protect through `VirtualAllocFromApp`/`VirtualProtectFromApp`).
-
-## Notes / known follow-ups
-
-- **Partition strictness:** this build uses the default `WINAPI_FAMILY_DESKTOP_APP`
-  partition (both desktop + app APIs visible), which is why `host_memory.cpp` — which
-  resolves `VirtualAlloc2`/`MapViewOfFile3` via `GetProcAddress` — compiles as-is. The
-  runtime AppContainer still requires the `*FromApp` variants; that swap is tracked in
-  CORE's HostMemory work. A stricter `WINAPI_FAMILY_APP` per-target pass can be layered
-  on later to catch direct desktop-API calls at compile time.
-- **OpenSSL is built from source here (not the `/MT` prebuilt).** The bundled
-  `openssl-ci` prebuilt is `/MT` and injects `LIBCMT`, which collides with the `/MD`
-  Store-CRT app at exe link (everything else is `/MD`, forced by
-  `CMAKE_MSVC_RUNTIME_LIBRARY`). OpenSSL is pervasive (≈12 core crypto/content TUs), so
-  it can't be dropped. The top-level CMake therefore defaults `YUZU_USE_BUNDLED_OPENSSL=OFF`
-  for `WindowsStore`, building OpenSSL from source — it inherits `/MD` and configures with
-  OpenSSL's `-UWP` target. Verified: it links into a `/MD` UWP exe with no `LIBCMT`
-  conflict. **Exe-link note:** OpenSSL pulls `ws2_32`/`crypt32`/`user32` (the last for its
-  fatal-error/service-detection code) — add those to the final appx exe's link set.
-- **The desktop build is unaffected** — this is a separate preset/binary dir; the normal
-  desktop configure is unchanged.
+The CI validator uses the pinned Windows SDK's MakeAppx and SignTool, checks the signed package and Microsoft-signed VCLibs, inspects the package manifest and x64 PE files, and rejects packaged private keys, firmware, and game dumps. A passing build does not establish console startup or game compatibility; those need a Series S/X test in the actual Game mode configuration.

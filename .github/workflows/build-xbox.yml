@@ -1,0 +1,540 @@
+name: Build Eden Xbox
+
+on:
+  push:
+    branches: [codex/xbox-ci-macos]
+    paths-ignore:
+      - .github/workflows/build-xbox.yml
+      - .github/workflows/prepare-xbox-release.yml
+      - README.md
+      - README.en.md
+      - README-developer.md
+      - README-macos.md
+      - docs/xbox/community-release.md
+      - docs/xbox/ci_macos_maintenance.md
+      - tools/xbox/package-appx.ps1
+      - tools/xbox/validate-appx.ps1
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag, or commit in this repository to build
+        required: false
+        type: string
+      unsigned_run_id:
+        description: Existing successful build run ID to sign without rebuilding (leave blank to build)
+        required: false
+        type: string
+      clean_build:
+        description: Skip caches and configure Mesa from scratch
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xbox-${{ github.ref }}-${{ inputs.unsigned_run_id || 'build' }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build UWP app and Mesa shader runtime
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.unsigned_run_id == '' }}
+    runs-on: windows-2022
+    timeout-minutes: 360
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      package_version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Check out requested source and submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record exact source revision
+        id: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw 'Unable to resolve a full source commit SHA.' }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          Write-Host "Source SHA: $sha"
+
+      - name: Calculate monotonically increasing APPX version
+        id: version
+        shell: pwsh
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          $n = [long]::Parse($env:RUN_NUMBER, [Globalization.CultureInfo]::InvariantCulture)
+          $majorPart = [math]::Floor($n / 65536)
+          $minorPart = $n % 65536
+          if ($majorPart -gt 65535) { throw 'GitHub run number exceeded four-part APPX version range.' }
+          $version = "0.3.$majorPart.$minorPart"
+          "value=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Package version: $version"
+
+      - name: Cache CPM, Mesa, and incremental Ninja trees
+        id: cache
+        if: ${{ !inputs.clean_build }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/cpm
+            build-uwp
+            ${{ runner.temp }}\mesa-build
+          key: ${{ runner.os }}-uwp26100-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-uwp26100-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-
+
+      - name: Ensure Visual Studio v143 UWP tools and SDK 26100
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsRoot) { throw 'Visual Studio 2022 with the x64 C++ toolset is missing.' }
+          $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vs_installer.exe'
+          $required = @(
+            'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+            'Microsoft.VisualStudio.ComponentGroup.UWP.VC',
+            'Microsoft.VisualStudio.Component.Windows11SDK.26100'
+          )
+          $installed = & $vswhere -products * -format json | ConvertFrom-Json
+          $instance = $installed | Where-Object { $_.installationPath -eq $vsRoot } | Select-Object -First 1
+          $components = @($instance.packages | ForEach-Object { $_.id })
+          $missing = @($required | Where-Object { $_ -notin $components })
+          if ($missing.Count) {
+            Write-Host "Adding VS components: $($missing -join ', ')"
+            foreach ($component in $missing) {
+              & $installer modify --installPath $vsRoot --add $component --quiet --norestart --wait
+              if ($LASTEXITCODE -ne 0) { throw "Visual Studio component installation failed for $component ($LASTEXITCODE)." }
+            }
+          }
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Lib\10.0.26100.0\um\x64\WindowsApp.lib'
+          if (-not (Test-Path $sdk)) { throw 'Windows SDK 10.0.26100.0 did not install.' }
+          $d3d12Header = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include\10.0.26100.0\um\d3d12.h'
+          if (-not (Test-Path $d3d12Header)) { throw 'Windows SDK 10.0.26100.0 is missing d3d12.h.' }
+          $d3d12Declarations = Get-Content -LiteralPath $d3d12Header -Raw
+          foreach ($symbol in @('D3D_ROOT_SIGNATURE_VERSION_1_2','D3D12_FEATURE_DATA_D3D12_OPTIONS14','D3D12_FEATURE_DATA_D3D12_OPTIONS15','D3D12_FEATURE_DATA_D3D12_OPTIONS16','D3D12_FEATURE_DATA_D3D12_OPTIONS17')) {
+            if ($d3d12Declarations -notmatch [regex]::Escape($symbol)) { throw "Windows SDK 10.0.26100.0 d3d12.h is missing $symbol." }
+          }
+          "EDEN_WINDOWS_SDK_VERSION=10.0.26100.0" >> $env:GITHUB_ENV
+          "VSROOT=$vsRoot" >> $env:GITHUB_ENV
+
+      - name: Install Perl and NASM required by source-built OpenSSL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) {
+            choco install strawberryperl --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Strawberry Perl installation failed.' }
+          }
+          if (-not (Test-Path 'C:\Program Files\NASM\nasm.exe')) {
+            choco install nasm --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'NASM installation failed.' }
+          }
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe') -or -not (Test-Path 'C:\Program Files\NASM\nasm.exe')) {
+            throw 'Native Strawberry Perl or NASM is still missing.'
+          }
+
+      - name: Install and pin glslangValidator 16.6.0
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/KhronosGroup/glslang/releases/download/16.6.0/glslang-16.6.0-windows-x86_64-release.zip'
+          $expected = '82bf434e69b9bb4829de7e2b4bc2c5e7a7861e53d66cf75e5cc70f5f694a8d9b'
+          $zip = Join-Path $env:RUNNER_TEMP 'glslang-16.6.0.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "glslang release checksum mismatch: $actual" }
+          $extract = Join-Path $env:RUNNER_TEMP 'glslang-16.6.0'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          $binary = Get-ChildItem -LiteralPath $extract -Filter glslang.exe -File -Recurse | Select-Object -First 1
+          if (-not $binary) { throw 'Pinned glslang release has no glslang.exe.' }
+          New-Item -ItemType Directory -Path 'C:\glslang\bin' -Force | Out-Null
+          Copy-Item $binary.FullName 'C:\glslang\bin\glslangValidator.exe' -Force
+          & 'C:\glslang\bin\glslangValidator.exe' --version
+          if ($LASTEXITCODE -ne 0) { throw 'glslangValidator preflight failed.' }
+
+      - name: Preflight all native tools and Store CRT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PATH = "C:\Strawberry\perl\bin;C:\Program Files\NASM;C:\glslang\bin;$env:PATH"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsRoot = & $vswhere -latest -products * -property installationPath
+          $vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvarsall.bat'
+          $probe = "`"$vcvars`" x64 uwp $env:EDEN_WINDOWS_SDK_VERSION >nul && set"
+          $envText = & $env:ComSpec /d /s /c $probe 2>&1 | Out-String
+          $probeExitCode = $LASTEXITCODE
+          $libPath = [regex]::Match($envText, '(?im)^LIB=(.*)$').Groups[1].Value.Trim()
+          $platform = [regex]::Match($envText, '(?im)^VSCMD_ARG_APP_PLAT=(.*)$').Groups[1].Value.Trim()
+          $selectedSdk = [regex]::Match($envText, '(?im)^WindowsSDKVersion=(.*)$').Groups[1].Value.Trim().TrimEnd([char]92)
+          if ($probeExitCode -ne 0 -or $libPath -notmatch 'x64\\store' -or $platform -ne 'UWP' -or $selectedSdk -ne $env:EDEN_WINDOWS_SDK_VERSION) {
+            $storeCrtFound = $libPath -match 'x64\\store'
+            throw "vcvarsall failed its UWP toolchain preflight (exit=$probeExitCode; Store CRT=$storeCrtFound; platform=[$platform]; SDK=[$selectedSdk])."
+          }
+          $cmake = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+          $ninja = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+          foreach ($tool in @($cmake,$ninja,'C:\Strawberry\perl\bin\perl.exe','C:\Program Files\NASM\nasm.exe','C:\glslang\bin\glslangValidator.exe')) {
+            if (-not (Test-Path $tool)) { throw "Required pinned build tool is missing: $tool" }
+          }
+          if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'Git is missing from PATH.' }
+          if (-not (Get-Command python.exe -ErrorAction SilentlyContinue)) { throw 'Python 3 is missing from PATH.' }
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\10.0.26100.0\x64'
+          foreach ($tool in @('MakeAppx.exe','SignTool.exe','dxil.dll')) {
+            if (-not (Test-Path (Join-Path $kits $tool))) { throw "SDK 10.0.26100.0 is missing $tool" }
+          }
+          $vclibs = Join-Path ${env:ProgramFiles(x86)} 'Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx'
+          if (-not (Test-Path $vclibs)) { throw 'Microsoft.VCLibs.x64.14.00.appx is missing from the UWP Extension SDK.' }
+          & $cmake --version
+          if ($LASTEXITCODE -ne 0) { throw 'CMake preflight failed.' }
+          $cmakeVersionText = & $cmake --version | Select-Object -First 1
+          if ($cmakeVersionText -notmatch 'version 3\.(3[1-9]|[4-9]\d)\.') { throw "CMake must be 3.31 or newer: $cmakeVersionText" }
+          & $ninja --version
+          if ($LASTEXITCODE -ne 0) { throw 'Ninja preflight failed.' }
+          python.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Python preflight failed.' }
+          & 'C:\Strawberry\perl\bin\perl.exe' -v | Select-Object -First 2
+          & 'C:\Program Files\NASM\nasm.exe' -v
+          if ($LASTEXITCODE -ne 0) { throw 'NASM preflight failed.' }
+          git --version
+
+      - name: Build SPIR-V to DXIL Store-CRT runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mesaDir = Join-Path $env:RUNNER_TEMP 'mesa-build'
+          & .\tools\xbox\build-spirv-to-dxil.ps1 -WorkDir $mesaDir
+          if ($LASTEXITCODE -ne 0) { throw 'Mesa spirv_to_dxil build failed.' }
+          $dll = Join-Path $mesaDir 'build-uwp\src\microsoft\spirv_to_dxil\spirv_to_dxil.dll'
+          if (-not (Test-Path $dll)) { throw 'Mesa translator DLL was not produced.' }
+          $exports = & dumpbin.exe /nologo /exports $dll
+          foreach ($symbol in @('spirv_to_dxil','eden_spirv_to_dxil_pipeline','eden_spirv_to_dxil_pipeline_v2')) {
+            if (-not ($exports | Select-String -SimpleMatch $symbol)) { throw "Mesa DLL is missing required export $symbol." }
+          }
+          $imports = & dumpbin.exe /nologo /dependents $dll
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect Mesa DLL imports.' }
+          $imports | ForEach-Object { Write-Host $_ }
+
+      - name: Configure UWP x64
+        shell: cmd
+        run: tools\xbox\build-env.bat cmake --preset uwp-x64 -DCMAKE_SYSTEM_VERSION=10.0.26100.0
+
+      - name: Build eden-uwp
+        shell: cmd
+        run: tools\xbox\build-env.bat cmake --build --preset uwp-x64 --target eden-uwp
+
+      - name: Assemble unsigned, allowlisted build payload
+        id: payload
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'eden-xbox-payload'
+          $bin = Join-Path $root 'build-uwp\bin'
+          New-Item -ItemType Directory -Path $bin -Force | Out-Null
+          Copy-Item 'build-uwp\bin\eden-uwp.exe' $bin
+          Get-ChildItem 'build-uwp\bin' -Filter '*.dll' -File | Copy-Item -Destination $bin
+          Copy-Item 'build-uwp\bin\eden-uwp.pdb' $root -ErrorAction SilentlyContinue
+          $mesa = Join-Path $env:RUNNER_TEMP 'mesa-build\build-uwp\src\microsoft\spirv_to_dxil\spirv_to_dxil.dll'
+          Copy-Item $mesa (Join-Path $bin 'spirv_to_dxil.dll')
+          $sdkDxil = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin\$env:EDEN_WINDOWS_SDK_VERSION\x64\dxil.dll"
+          if (-not (Test-Path $sdkDxil)) { throw 'SDK DXIL runtime is missing.' }
+          $vclibs = Join-Path ${env:ProgramFiles(x86)} 'Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx'
+          Copy-Item $vclibs (Join-Path $root 'Microsoft.VCLibs.x64.14.00.appx')
+          $metadata = [ordered]@{
+            source_commit = $env:SOURCE_SHA
+            source_workflow_run_id = [long]$env:GITHUB_RUN_ID
+            source_workflow_run_number = [long]$env:GITHUB_RUN_NUMBER
+            package_version = $env:PACKAGE_VERSION
+          }
+          $metadata | ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 (Join-Path $root 'build-payload-metadata.json')
+          "path=$root" >> $env:GITHUB_OUTPUT
+          Write-Host "Unsigned build payload assembled for source $env:SOURCE_SHA and package $env:PACKAGE_VERSION"
+
+      - name: Upload unsigned build payload for isolated signing
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xbox-unsigned-${{ github.run_id }}
+          path: ${{ runner.temp }}\eden-xbox-payload\**
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload matching symbols for diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xbox-symbols-${{ github.run_id }}
+          path: ${{ runner.temp }}\eden-xbox-payload\eden-uwp.pdb
+          if-no-files-found: warn
+          retention-days: 14
+
+  package:
+    name: Sign, inspect, and publish sideload package
+    needs: build
+    if: ${{ always() && (needs.build.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.unsigned_run_id != '')) }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out trusted packaging scripts from this repository default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name == 'codex/xbox-ci-macos' && github.workflow_sha || 'xbox' }}
+          persist-credentials: false
+
+      - name: Verify selected source build run and artifact
+        id: prior_run
+        if: ${{ inputs.unsigned_run_id != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNSIGNED_RUN_ID: ${{ inputs.unsigned_run_id }}
+          EXPECTED_BRANCH: ${{ github.ref_name }}
+          EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:UNSIGNED_RUN_ID -notmatch '^\d{6,}$') { throw 'Unsigned run ID must be a numeric GitHub Actions run ID.' }
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GH_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $base = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions"
+          $run = Invoke-RestMethod -Headers $headers -Uri "$base/runs/$env:UNSIGNED_RUN_ID"
+          $workflow = Invoke-RestMethod -Headers $headers -Uri "$base/workflows/build-xbox.yml"
+          if ([long]$run.repository.id -ne [long]$env:EXPECTED_REPOSITORY_ID) { throw 'Selected build run belongs to a different repository.' }
+          if ($run.workflow_id -ne $workflow.id -or $run.path -ne '.github/workflows/build-xbox.yml') { throw 'Selected run was not created by this Xbox build workflow.' }
+          if ($run.head_branch -ne $env:EXPECTED_BRANCH) { throw 'Selected build run must come from the same branch as this signing run.' }
+          if ($run.event -notin @('push','workflow_dispatch') -or $run.head_sha -notmatch '^[0-9a-f]{40}$') { throw 'Selected build run has an unsupported event or invalid source SHA.' }
+          $jobs = Invoke-RestMethod -Headers $headers -Uri "$base/runs/$env:UNSIGNED_RUN_ID/jobs?per_page=100"
+          $buildJob = $jobs.jobs | Where-Object { $_.name -eq 'Build UWP app and Mesa shader runtime' } | Select-Object -First 1
+          if (-not $buildJob -or $buildJob.conclusion -ne 'success') { throw 'Selected run has no successful UWP build job.' }
+          $artifactName = "xbox-unsigned-$env:UNSIGNED_RUN_ID"
+          $artifacts = Invoke-RestMethod -Headers $headers -Uri "$base/runs/$env:UNSIGNED_RUN_ID/artifacts?per_page=100"
+          $artifact = $artifacts.artifacts | Where-Object { $_.name -eq $artifactName } | Select-Object -First 1
+          if (-not $artifact -or $artifact.expired -or $artifact.size_in_bytes -le 0) { throw 'Selected run has no available unsigned build artifact.' }
+          "source_run_id=$($run.id)" >> $env:GITHUB_OUTPUT
+          "source_run_number=$($run.run_number)" >> $env:GITHUB_OUTPUT
+          "source_sha=$($run.head_sha)" >> $env:GITHUB_OUTPUT
+          "source_event=$($run.event)" >> $env:GITHUB_OUTPUT
+          Write-Host "Verified successful build job and available payload from run $($run.id)."
+
+      - name: Download unsigned payload from this run
+        if: ${{ inputs.unsigned_run_id == '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: xbox-unsigned-${{ github.run_id }}
+          path: ${{ runner.temp }}\eden-xbox-payload
+
+      - name: Download unsigned payload from selected run
+        if: ${{ inputs.unsigned_run_id != '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: xbox-unsigned-${{ inputs.unsigned_run_id }}
+          path: ${{ runner.temp }}\eden-xbox-payload
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.unsigned_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve package source metadata
+        id: package_source
+        shell: pwsh
+        env:
+          REUSE_UNSIGNED_RUN: ${{ inputs.unsigned_run_id != '' }}
+          BUILD_SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          BUILD_PACKAGE_VERSION: ${{ needs.build.outputs.package_version }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_NUMBER: ${{ github.run_number }}
+          PRIOR_RUN_ID: ${{ steps.prior_run.outputs.source_run_id }}
+          PRIOR_RUN_NUMBER: ${{ steps.prior_run.outputs.source_run_number }}
+          PRIOR_SOURCE_SHA: ${{ steps.prior_run.outputs.source_sha }}
+          PRIOR_SOURCE_EVENT: ${{ steps.prior_run.outputs.source_event }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:REUSE_UNSIGNED_RUN -eq 'true') {
+            $metadataPath = Join-Path $env:RUNNER_TEMP 'eden-xbox-payload\build-payload-metadata.json'
+            if (Test-Path -LiteralPath $metadataPath) {
+              $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+              if ([long]$metadata.source_workflow_run_id -ne [long]$env:PRIOR_RUN_ID) { throw 'Payload metadata run ID does not match the verified source run.' }
+              if ($metadata.source_commit -notmatch '^[0-9a-f]{40}$' -or $metadata.package_version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Payload metadata has an invalid source SHA or package version.' }
+              $sourceSha = $metadata.source_commit
+              $packageVersion = $metadata.package_version
+              $sourceRunNumber = [long]$metadata.source_workflow_run_number
+            } else {
+              if ($env:PRIOR_SOURCE_EVENT -ne 'push') { throw 'Legacy payloads without provenance metadata can only be reused from a push build.' }
+              $sourceSha = $env:PRIOR_SOURCE_SHA
+              $sourceRunNumber = [long]$env:PRIOR_RUN_NUMBER
+              $majorPart = [math]::Floor($sourceRunNumber / 65536)
+              $minorPart = $sourceRunNumber % 65536
+              $packageVersion = "0.3.$majorPart.$minorPart"
+            }
+            $sourceRunId = [long]$env:PRIOR_RUN_ID
+          } else {
+            $sourceSha = $env:BUILD_SOURCE_SHA
+            $packageVersion = $env:BUILD_PACKAGE_VERSION
+            $sourceRunId = [long]$env:BUILD_RUN_ID
+            $sourceRunNumber = [long]$env:BUILD_RUN_NUMBER
+          }
+          if ($sourceSha -notmatch '^[0-9a-f]{40}$' -or $packageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Resolved package source metadata is invalid.' }
+          "source_sha=$sourceSha" >> $env:GITHUB_OUTPUT
+          "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
+          "source_run_id=$sourceRunId" >> $env:GITHUB_OUTPUT
+          "source_run_number=$sourceRunNumber" >> $env:GITHUB_OUTPUT
+          Write-Host "Package source: $sourceSha; source run: $sourceRunId; version: $packageVersion"
+
+      - name: Verify signer and export pinned public certificate
+        id: signing
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.XBOX_SIGNING_PFX_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.XBOX_SIGNING_PASSWORD }}
+          SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('SIGNING_PFX_BASE64','SIGNING_PASSWORD','SIGNING_THUMBPRINT')) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { throw "Missing GitHub Actions secret $name. Run the macOS signing bootstrap in README-macos.md." }
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'eden-development-signing.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          $password = ConvertTo-SecureString $env:SIGNING_PASSWORD -AsPlainText -Force
+          Write-Host 'Importing the pinned signing PFX into the current-user personal store.'
+          $certs = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Write-Host 'Imported signing PFX into the current-user personal store.'
+          $cert = $certs | Where-Object { $_.Thumbprint -eq ($env:SIGNING_THUMBPRINT -replace '\s','') } | Select-Object -First 1
+          Remove-Item -LiteralPath $pfxPath -Force
+          Remove-Item Env:SIGNING_PFX_BASE64,Env:SIGNING_PASSWORD -ErrorAction SilentlyContinue
+          if (-not $cert -or $cert.Subject -ne 'CN=EdenXboxDev' -or $cert.NotAfter -le (Get-Date)) { throw 'Signing PFX, certificate subject, thumbprint, or expiry validation failed.' }
+          $ekuExtension = $cert.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' } | Select-Object -First 1
+          if (-not $ekuExtension) { throw 'Pinned certificate has no enhanced key usage extension.' }
+          $eku = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new()
+          $eku.CopyFrom($ekuExtension)
+          $ekuOids = @($eku.EnhancedKeyUsages | ForEach-Object { $_.Value })
+          if ('1.3.6.1.5.5.7.3.3' -notin $ekuOids) { throw 'Pinned certificate lacks the code-signing EKU.' }
+          Write-Host 'Validated the pinned certificate code-signing EKU.'
+          $publicCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-public.cer'
+          Write-Host 'Exporting the validated public certificate for package verification.'
+          Export-Certificate -Cert $cert -FilePath $publicCertificatePath -Type CERT -Force | Out-Null
+          if (-not (Test-Path -LiteralPath $publicCertificatePath)) { throw 'The validated public certificate was not exported.' }
+          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($publicCertificatePath)
+          if ($publicCert.Thumbprint -ne $cert.Thumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
+
+      - name: Package, sign, and require shader and CRT runtime
+        shell: pwsh
+        env:
+          SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
+          PACKAGE_VERSION: ${{ steps.package_source.outputs.package_version }}
+          SOURCE_SHA: ${{ steps.package_source.outputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:EDEN_WINDOWS_SDK_VERSION = '10.0.26100.0'
+          $mesaRoot = Join-Path $env:RUNNER_TEMP 'eden-xbox-payload'
+          $translator = Join-Path $mesaRoot 'build-uwp\bin\spirv_to_dxil.dll'
+          if (-not (Test-Path $translator)) { throw 'The Mesa shader translator is missing from the downloaded unsigned payload.' }
+          & .\tools\xbox\package-appx.ps1 -BuildDir (Join-Path $mesaRoot 'build-uwp') -SpirvToDxil (Join-Path $mesaRoot 'build-uwp\bin\spirv_to_dxil.dll') -OutDir build-uwp\package -Library -PackageVersion $env:PACKAGE_VERSION -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT -VCLibsPackage (Join-Path $env:RUNNER_TEMP 'eden-xbox-payload\Microsoft.VCLibs.x64.14.00.appx') -RequireRuntimeFiles
+          if ($LASTEXITCODE -ne 0) { throw 'Strict APPX packaging/signing failed.' }
+
+      - name: Validate APPX structure, manifest, signature, dependency, and runtime DLLs
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ steps.package_source.outputs.source_sha }}
+          SOURCE_RUN_ID: ${{ steps.package_source.outputs.source_run_id }}
+          SOURCE_RUN_NUMBER: ${{ steps.package_source.outputs.source_run_number }}
+          PACKAGE_VERSION: ${{ steps.package_source.outputs.package_version }}
+          SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = '.\tools\xbox\validate-appx.ps1'
+          & $script -Package 'build-uwp\package\eden-xbox.appx' -Certificate 'build-uwp\package\eden-xbox.cer' -VCLibs 'build-uwp\package\Microsoft.VCLibs.x64.14.00.appx' -SdkVersion '10.0.26100.0' -ExpectedPublisher 'CN=EdenXboxDev' -ExpectedVersion $env:PACKAGE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'APPX validation failed.' }
+          $out = 'build-uwp\package'
+          $metadata = [ordered]@{
+            source_commit = $env:SOURCE_SHA
+            source_workflow_run_id = [long]$env:SOURCE_RUN_ID
+            source_workflow_run_number = [long]$env:SOURCE_RUN_NUMBER
+            source_workflow_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID"
+            package_workflow_run_id = [long]$env:GITHUB_RUN_ID
+            package_workflow_run_number = [long]$env:GITHUB_RUN_NUMBER
+            package_workflow_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            package_version = $env:PACKAGE_VERSION
+            windows_runner = $env:ImageOS + ' ' + $env:ImageVersion
+            windows_sdk = '10.0.26100.0'
+            publisher = 'CN=EdenXboxDev'
+            signing_thumbprint = $env:SIGNING_THUMBPRINT
+            validated_utc = [DateTime]::UtcNow.ToString('o')
+          }
+          $metadata | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'build-metadata.json')
+          $files = Get-ChildItem $out -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object Name
+          $sums = foreach ($file in $files) { "$( (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant() )  $($file.Name)" }
+          $sums | Set-Content -Encoding ascii (Join-Path $out 'SHA256SUMS.txt')
+          Get-Content (Join-Path $out 'SHA256SUMS.txt')
+
+      - name: Upload signed Xbox install artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $download = Join-Path $env:RUNNER_TEMP 'eden-xbox-install'
+          New-Item -ItemType Directory -Path $download -Force | Out-Null
+          foreach ($name in @('eden-xbox.appx','eden-xbox.cer','Microsoft.VCLibs.x64.14.00.appx','SHA256SUMS.txt','build-metadata.json')) {
+            Copy-Item (Join-Path 'build-uwp\package' $name) $download
+          }
+          Copy-Item 'README-macos.md' $download
+          Copy-Item 'tools\xbox\eden-xbox-macos.py' $download
+      - name: Publish the signed Xbox install artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eden-xbox-series-s-${{ steps.package_source.outputs.package_version }}-${{ steps.package_source.outputs.source_sha }}
+          path: ${{ runner.temp }}\eden-xbox-install\**
+          if-no-files-found: error
+          retention-days: 30
+
+  open-upstream-sync-pr:
+    name: Open a draft PR after an upstream build passes
+    if: ${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/automation/upstream-xbox-') }}
+    needs: [build, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Create a draft pull request in this fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          existing="$(gh api "repos/${REPOSITORY}/pulls?state=open&head=${OWNER}:${BRANCH}&base=xbox" --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            echo "Draft PR #$existing already exists for $BRANCH."
+            exit 0
+          fi
+          title="Upstream Xbox sync ${SOURCE_SHA:0:12}"
+          body="$(cat <<EOF
+          Automated upstream sync from JulianDr14/eden-xbox.
+
+          Source commit: ${SOURCE_SHA}
+          Validated package version: ${PACKAGE_VERSION}
+
+          The Windows build, APPX signing, dependency checks, and package validation passed before this draft was opened. Review the upstream source diff and test the artifact on the console before merging.
+          EOF
+          )"
+          gh api --method POST "repos/${REPOSITORY}/pulls" \
+            -f "title=${title}" \
+            -f "head=${BRANCH}" \
+            -f "base=xbox" \
+            -F draft=true \
+            -f "body=${body}"
