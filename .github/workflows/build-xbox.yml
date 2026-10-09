@@ -295,8 +295,12 @@ jobs:
           Remove-Item -LiteralPath $pfxPath -Force
           Remove-Item Env:SIGNING_PFX_BASE64,Env:SIGNING_PASSWORD -ErrorAction SilentlyContinue
           if (-not $cert -or $cert.Subject -ne 'CN=EdenXboxDev' -or $cert.NotAfter -le (Get-Date)) { throw 'Signing PFX, certificate subject, thumbprint, or expiry validation failed.' }
-          $eku = $cert.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId.Value }
-          if ('1.3.6.1.5.5.7.3.3' -notin $eku) { throw 'Pinned certificate lacks the code-signing EKU.' }
+          $ekuExtension = $cert.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' } | Select-Object -First 1
+          if (-not $ekuExtension) { throw 'Pinned certificate has no enhanced key usage extension.' }
+          $eku = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new()
+          $eku.CopyFrom($ekuExtension)
+          $ekuOids = @($eku.EnhancedKeyUsages | ForEach-Object { $_.Value })
+          if ('1.3.6.1.5.5.7.3.3' -notin $ekuOids) { throw 'Pinned certificate lacks the code-signing EKU.' }
           Export-Certificate -Cert $cert -FilePath (Join-Path $env:RUNNER_TEMP 'eden-development-root.cer') -Type CERT -Force | Out-Null
           Import-Certificate -FilePath (Join-Path $env:RUNNER_TEMP 'eden-development-root.cer') -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
