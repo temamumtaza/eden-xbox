@@ -415,33 +415,42 @@ jobs:
           $ekuOids = @($eku.EnhancedKeyUsages | ForEach-Object { $_.Value })
           if ('1.3.6.1.5.5.7.3.3' -notin $ekuOids) { throw 'Pinned certificate lacks the code-signing EKU.' }
           Write-Host 'Validated the pinned certificate code-signing EKU.'
-          $rootCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-root.cer'
+          $publicCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-public.cer'
           Write-Host 'Exporting the validated public certificate for package verification.'
-          Export-Certificate -Cert $cert -FilePath $rootCertificatePath -Type CERT -Force | Out-Null
-          if (-not (Test-Path -LiteralPath $rootCertificatePath)) { throw 'The validated public certificate was not exported.' }
-          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCertificatePath)
+          Export-Certificate -Cert $cert -FilePath $publicCertificatePath -Type CERT -Force | Out-Null
+          if (-not (Test-Path -LiteralPath $publicCertificatePath)) { throw 'The validated public certificate was not exported.' }
+          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($publicCertificatePath)
           if ($publicCert.Thumbprint -ne $cert.Thumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
 
-      - name: Add pinned certificate to the verification root store
+      - name: Trust pinned package signer for verification
         timeout-minutes: 3
         shell: pwsh
         env:
           SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $rootCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-root.cer'
-          if (-not (Test-Path -LiteralPath $rootCertificatePath)) { throw 'The validated public certificate was not exported.' }
-          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCertificatePath)
+          $publicCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-public.cer'
+          if (-not (Test-Path -LiteralPath $publicCertificatePath)) { throw 'The validated public certificate was not exported.' }
+          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($publicCertificatePath)
           $expectedThumbprint = $env:SIGNING_THUMBPRINT -replace '\s',''
           if ($publicCert.Thumbprint -ne $expectedThumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
-          $certutil = Join-Path $env:WINDIR 'System32\certutil.exe'
-          if (-not (Test-Path -LiteralPath $certutil)) { throw 'Windows certutil.exe is missing.' }
-          Write-Host 'Adding the thumbprint-validated public certificate to the current-user root store.'
-          $certutilOutput = @('Y') | & $certutil -user -f -addstore Root $rootCertificatePath 2>&1
-          $certutilExit = $LASTEXITCODE
-          $certutilOutput | ForEach-Object { Write-Host $_ }
-          if ($certutilExit -ne 0) { throw "certutil root-store import failed (exit=$certutilExit)." }
-          Write-Host 'Added pinned public certificate to current-user root store.'
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPeople,
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+          try {
+            Write-Host 'Opening current-user TrustedPeople store.'
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $alreadyTrusted = @($store.Certificates | Where-Object { $_.Thumbprint -eq $expectedThumbprint }).Count -gt 0
+            if (-not $alreadyTrusted) {
+              Write-Host 'Adding the thumbprint-validated signer to TrustedPeople for package validation.'
+              $store.Add($publicCert)
+            }
+            $trusted = @($store.Certificates | Where-Object { $_.Thumbprint -eq $expectedThumbprint }).Count -gt 0
+            if (-not $trusted) { throw 'Pinned signer is absent from the current-user TrustedPeople store.' }
+          } finally {
+            $store.Close()
+          }
+          Write-Host 'Validated signer trust in the ephemeral runner TrustedPeople store.'
 
       - name: Package, sign, and require shader and CRT runtime
         shell: pwsh
