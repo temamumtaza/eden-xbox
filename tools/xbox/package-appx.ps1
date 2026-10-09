@@ -249,7 +249,7 @@ if ($SigningCertificateThumbprint -and
 }
 
 $signtool = Find-SdkTool "SignTool.exe"
-& $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /tr https://timestamp.digicert.com /td SHA256 $appx
+& $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /tr http://timestamp.digicert.com /td SHA256 $appx
 if ($LASTEXITCODE -ne 0) { throw "SignTool failed ($LASTEXITCODE)." }
 
 # The console must trust the signer: upload this .cer alongside the appx in the Device Portal.
