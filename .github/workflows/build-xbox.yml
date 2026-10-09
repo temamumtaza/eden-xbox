@@ -386,7 +386,7 @@ jobs:
           "source_run_number=$sourceRunNumber" >> $env:GITHUB_OUTPUT
           Write-Host "Package source: $sourceSha; source run: $sourceRunId; version: $packageVersion"
 
-      - name: Verify and import pinned development certificate
+      - name: Verify signer and export pinned public certificate
         id: signing
         shell: pwsh
         env:
@@ -419,25 +419,34 @@ jobs:
           Write-Host 'Exporting the validated public certificate for package verification.'
           Export-Certificate -Cert $cert -FilePath $rootCertificatePath -Type CERT -Force | Out-Null
           if (-not (Test-Path -LiteralPath $rootCertificatePath)) { throw 'The validated public certificate was not exported.' }
-          Write-Host 'Adding the validated public certificate to the current-user root store.'
           $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCertificatePath)
           if ($publicCert.Thumbprint -ne $cert.Thumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
+
+      - name: Add pinned certificate to the verification root store
+        timeout-minutes: 3
+        shell: pwsh
+        env:
+          SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rootCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-root.cer'
+          if (-not (Test-Path -LiteralPath $rootCertificatePath)) { throw 'The validated public certificate was not exported.' }
+          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCertificatePath)
+          $expectedThumbprint = $env:SIGNING_THUMBPRINT -replace '\s',''
+          if ($publicCert.Thumbprint -ne $expectedThumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
           $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
             [System.Security.Cryptography.X509Certificates.StoreName]::Root,
             [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
           )
           try {
+            Write-Host 'Opening current-user root store.'
             $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $findByThumbprint = [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint
-            $alreadyTrusted = $rootStore.Certificates.Find($findByThumbprint, $cert.Thumbprint, $false)
-            if ($alreadyTrusted.Count -eq 0) { $rootStore.Add($publicCert) }
-            $trusted = $rootStore.Certificates.Find($findByThumbprint, $cert.Thumbprint, $false)
-            if ($trusted.Count -eq 0) { throw 'Pinned public certificate was not added to the current-user root store.' }
+            Write-Host 'Adding pinned public certificate to current-user root store.'
+            $rootStore.Add($publicCert)
+            Write-Host 'Added pinned public certificate to current-user root store.'
           } finally {
             $rootStore.Close()
           }
-          Write-Host 'Imported the validated public certificate into the current-user root store.'
-          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
 
       - name: Package, sign, and require shader and CRT runtime
         shell: pwsh
