@@ -424,36 +424,6 @@ jobs:
           $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($publicCertificatePath)
           if ($publicCert.Thumbprint -ne $cert.Thumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
 
-      - name: Trust pinned package signer for verification
-        timeout-minutes: 3
-        shell: pwsh
-        env:
-          SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $publicCertificatePath = Join-Path $env:RUNNER_TEMP 'eden-development-public.cer'
-          if (-not (Test-Path -LiteralPath $publicCertificatePath)) { throw 'The validated public certificate was not exported.' }
-          $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($publicCertificatePath)
-          $expectedThumbprint = $env:SIGNING_THUMBPRINT -replace '\s',''
-          if ($publicCert.Thumbprint -ne $expectedThumbprint) { throw 'Exported public certificate thumbprint differs from the pinned signer.' }
-          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-            [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPeople,
-            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-          try {
-            Write-Host 'Opening current-user TrustedPeople store.'
-            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $alreadyTrusted = @($store.Certificates | Where-Object { $_.Thumbprint -eq $expectedThumbprint }).Count -gt 0
-            if (-not $alreadyTrusted) {
-              Write-Host 'Adding the thumbprint-validated signer to TrustedPeople for package validation.'
-              $store.Add($publicCert)
-            }
-            $trusted = @($store.Certificates | Where-Object { $_.Thumbprint -eq $expectedThumbprint }).Count -gt 0
-            if (-not $trusted) { throw 'Pinned signer is absent from the current-user TrustedPeople store.' }
-          } finally {
-            $store.Close()
-          }
-          Write-Host 'Validated signer trust in the ephemeral runner TrustedPeople store.'
-
       - name: Package, sign, and require shader and CRT runtime
         shell: pwsh
         env:
