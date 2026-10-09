@@ -6,7 +6,7 @@
 #
 #   powershell -ExecutionPolicy Bypass -File tools\xbox\build-spirv-to-dxil.ps1
 #
-# Needs Python 3 on PATH and Visual Studio with the C++ x64 toolset and the UWP (Store CRT)
+# Needs 7-Zip, Python 3 on PATH and Visual Studio with the C++ x64 toolset and the UWP (Store CRT)
 # component. Mesa sources, the venv and the build tree live in -WorkDir, outside the repo; the DLL is
 # a build artifact and is never committed.
 
@@ -56,9 +56,29 @@ if (-not (Test-Path (Join-Path $src "meson.build"))) {
         if (-not (Test-Path $mesaTar)) { throw "7-Zip did not produce the expected Mesa TAR archive" }
 
         Write-Host "extracting Mesa source files ..."
-        & $sevenZip.Source x -y -bso0 -bsp1 "-o$WorkDir" $mesaTar
-        if ($LASTEXITCODE -gt 1) { throw "extracting Mesa TAR archive failed (7-Zip exit $LASTEXITCODE)" }
+        $extractErrorsPath = Join-Path $stage "extract-errors.txt"
+        & $sevenZip.Source x -y -bso0 -bsp1 "-o$WorkDir" $mesaTar 2> $extractErrorsPath
+        $extractExitCode = $LASTEXITCODE
+        $extractErrors = @(Get-Content -LiteralPath $extractErrorsPath -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match "ERROR:" })
+        $linkWarnings = @($extractErrors | Where-Object { $_ -match "ERROR: Dangerous link path was ignored :" })
+        $unexpectedErrors = @($extractErrors | Where-Object { $_ -notmatch "ERROR: Dangerous link path was ignored :" })
+        if ($unexpectedErrors.Count -gt 0) {
+            throw "Mesa extraction reported unexpected 7-Zip errors: $($unexpectedErrors -join '; ')"
+        }
+        if ($extractExitCode -ne 0 -and ($extractExitCode -ne 2 -or $linkWarnings.Count -eq 0)) {
+            throw "extracting Mesa TAR archive failed (7-Zip exit $extractExitCode)"
+        }
+        if ($linkWarnings.Count -gt 0) {
+            Write-Host "7-Zip skipped $($linkWarnings.Count) unsafe Mesa source symlinks."
+        }
         if (-not (Test-Path (Join-Path $src "meson.build"))) { throw "extracting Mesa failed" }
+        foreach ($required in @(
+            "src\compiler\nir\meson.build",
+            "src\microsoft\spirv_to_dxil\meson.build"
+        )) {
+            if (-not (Test-Path (Join-Path $src $required))) { throw "Mesa archive is missing $required" }
+        }
     }
     finally {
         if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
