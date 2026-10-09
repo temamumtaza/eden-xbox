@@ -2,7 +2,7 @@
 
 ## Build flow
 
-The Build Eden Xbox workflow runs on a hosted Windows 2022 x64 runner. It checks out the selected fork revision and recursive submodules, pins Windows SDK 10.0.22621.0, verifies the UWP Store CRT, and installs the required Visual Studio UWP component, Strawberry Perl, NASM, and checksum-pinned glslangValidator. CMake 3.31 or later and Ninja come from the Visual Studio installation.
+The Build Eden Xbox workflow runs on a hosted Windows 2022 x64 runner. It checks out the selected fork revision and recursive submodules, pins Windows SDK 10.0.26100.0, verifies the UWP Store CRT, and installs the required Visual Studio UWP component, Strawberry Perl, NASM, and checksum-pinned glslangValidator. SDK 26100 supplies the D3D12 feature declarations used by the current renderer; runtime capability checks retain fallback behavior on older Xbox OS versions. CMake 3.31 or later and Ninja come from the Visual Studio installation.
 
 The build reuses branch-scoped CPM, Ninja, and Mesa caches. Cache keys include the dependency/build-script inputs and source SHA; clean_build disables cache restore. Mesa sources and build outputs remain under the runner temporary directory. The script verifies the Mesa source archive before extraction and installs pinned Python build packages. spirv_to_dxil.dll is only staged inside the signed APPX; it is not committed or uploaded as a standalone binary.
 

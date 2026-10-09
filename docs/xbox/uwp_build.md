@@ -10,7 +10,7 @@ The short install steps are in [README-macos.md](../../README-macos.md); signing
 
 ## Windows toolchain used by CI
 
-The hosted Windows 2022 runner uses Visual Studio 2022 with the v143 x64 UWP tools, Windows SDK 10.0.22621.0, Store CRT, CMake 3.31 or newer, Ninja, native Strawberry Perl, NASM, Python 3, and glslangValidator 16.6.0. The workflow checks the selected SDK and Store CRT before configuration. The SDK supplies MakeAppx, SignTool, and dxil.dll; the UWP Extension SDK supplies Microsoft.VCLibs.x64.14.00.appx.
+The hosted Windows 2022 runner uses Visual Studio 2022 with the v143 x64 UWP tools, Windows SDK 10.0.26100.0, Store CRT, CMake 3.31 or newer, Ninja, native Strawberry Perl, NASM, Python 3, and glslangValidator 16.6.0. SDK 26100 supplies the D3D12 feature declarations used by the current renderer; its runtime feature queries fall back when the Xbox OS does not expose an optional feature. The workflow checks the selected SDK and Store CRT before configuration. The SDK supplies MakeAppx, SignTool, and dxil.dll; the UWP Extension SDK supplies Microsoft.VCLibs.x64.14.00.appx.
 
 The source CMakeLists requires CMake 3.31. The uwp-x64 preset selects WindowsStore, Release, UWP AppContainer Dynarmic settings, and the Xbox-specific frontend options. It does not use the old null-renderer-only build description.
 
@@ -18,8 +18,8 @@ The source CMakeLists requires CMake 3.31. The uwp-x64 preset selects WindowsSto
 
 A local Windows build is useful for development but is not required for release. From cmd.exe at the repository root, set the requested SDK and invoke the checked environment wrapper:
 
-    set EDEN_WINDOWS_SDK_VERSION=10.0.22621.0
-    tools\xbox\build-env.bat cmake --preset uwp-x64 -DCMAKE_SYSTEM_VERSION=10.0.22621.0
+    set EDEN_WINDOWS_SDK_VERSION=10.0.26100.0
+    tools\xbox\build-env.bat cmake --preset uwp-x64 -DCMAKE_SYSTEM_VERSION=10.0.26100.0
     tools\xbox\build-env.bat cmake --build --preset uwp-x64 --target eden-uwp
 
 The wrapper selects Visual Studio's UWP x64 Store CRT, applies the selected SDK, and checks that the environment did not silently fall back to desktop CRT. Use cmd.exe or PowerShell, not Git Bash. If the project root is a clean checkout without an SDK pin, set EDEN_WINDOWS_SDK_VERSION before invoking it.

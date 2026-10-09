@@ -72,11 +72,11 @@ jobs:
             .cache/cpm
             build-uwp
             ${{ runner.temp }}\mesa-build
-          key: ${{ runner.os }}-uwp22621-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-${{ github.sha }}
+          key: ${{ runner.os }}-uwp26100-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-uwp22621-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-
+            ${{ runner.os }}-uwp26100-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-
 
-      - name: Ensure Visual Studio v143 UWP tools and SDK 22621
+      - name: Ensure Visual Studio v143 UWP tools and SDK 26100
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -87,7 +87,7 @@ jobs:
           $required = @(
             'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
             'Microsoft.VisualStudio.ComponentGroup.UWP.VC',
-            'Microsoft.VisualStudio.Component.Windows10SDK.22621'
+            'Microsoft.VisualStudio.Component.Windows11SDK.26100'
           )
           $installed = & $vswhere -products * -format json | ConvertFrom-Json
           $instance = $installed | Where-Object { $_.installationPath -eq $vsRoot } | Select-Object -First 1
@@ -100,9 +100,15 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "Visual Studio component installation failed for $component ($LASTEXITCODE)." }
             }
           }
-          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Lib\10.0.22621.0\um\x64\WindowsApp.lib'
-          if (-not (Test-Path $sdk)) { throw 'Windows SDK 10.0.22621.0 did not install.' }
-          "EDEN_WINDOWS_SDK_VERSION=10.0.22621.0" >> $env:GITHUB_ENV
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Lib\10.0.26100.0\um\x64\WindowsApp.lib'
+          if (-not (Test-Path $sdk)) { throw 'Windows SDK 10.0.26100.0 did not install.' }
+          $d3d12Header = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include\10.0.26100.0\um\d3d12.h'
+          if (-not (Test-Path $d3d12Header)) { throw 'Windows SDK 10.0.26100.0 is missing d3d12.h.' }
+          $d3d12Declarations = Get-Content -LiteralPath $d3d12Header -Raw
+          foreach ($symbol in @('D3D_ROOT_SIGNATURE_VERSION_1_2','D3D12_FEATURE_DATA_D3D12_OPTIONS14','D3D12_FEATURE_DATA_D3D12_OPTIONS15','D3D12_FEATURE_DATA_D3D12_OPTIONS16','D3D12_FEATURE_DATA_D3D12_OPTIONS17')) {
+            if ($d3d12Declarations -notmatch [regex]::Escape($symbol)) { throw "Windows SDK 10.0.26100.0 d3d12.h is missing $symbol." }
+          }
+          "EDEN_WINDOWS_SDK_VERSION=10.0.26100.0" >> $env:GITHUB_ENV
           "VSROOT=$vsRoot" >> $env:GITHUB_ENV
 
       - name: Install Perl and NASM required by source-built OpenSSL
@@ -165,9 +171,9 @@ jobs:
           }
           if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw 'Git is missing from PATH.' }
           if (-not (Get-Command python.exe -ErrorAction SilentlyContinue)) { throw 'Python 3 is missing from PATH.' }
-          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\10.0.22621.0\x64'
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\10.0.26100.0\x64'
           foreach ($tool in @('MakeAppx.exe','SignTool.exe','dxil.dll')) {
-            if (-not (Test-Path (Join-Path $kits $tool))) { throw "SDK 10.0.22621.0 is missing $tool" }
+            if (-not (Test-Path (Join-Path $kits $tool))) { throw "SDK 10.0.26100.0 is missing $tool" }
           }
           $vclibs = Join-Path ${env:ProgramFiles(x86)} 'Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx'
           if (-not (Test-Path $vclibs)) { throw 'Microsoft.VCLibs.x64.14.00.appx is missing from the UWP Extension SDK.' }
@@ -203,7 +209,7 @@ jobs:
 
       - name: Configure UWP x64
         shell: cmd
-        run: tools\xbox\build-env.bat cmake --preset uwp-x64 -DCMAKE_SYSTEM_VERSION=10.0.22621.0
+        run: tools\xbox\build-env.bat cmake --preset uwp-x64 -DCMAKE_SYSTEM_VERSION=10.0.26100.0
 
       - name: Build eden-uwp
         shell: cmd
@@ -303,7 +309,7 @@ jobs:
           SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $env:EDEN_WINDOWS_SDK_VERSION = '10.0.22621.0'
+          $env:EDEN_WINDOWS_SDK_VERSION = '10.0.26100.0'
           $mesaRoot = Join-Path $env:RUNNER_TEMP 'eden-xbox-payload'
           $translator = Join-Path $mesaRoot 'build-uwp\bin\spirv_to_dxil.dll'
           if (-not (Test-Path $translator)) { throw 'The Mesa shader translator is missing from the downloaded unsigned payload.' }
@@ -319,7 +325,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $script = '.\tools\xbox\validate-appx.ps1'
-          & $script -Package 'build-uwp\package\eden-xbox.appx' -Certificate 'build-uwp\package\eden-xbox.cer' -VCLibs 'build-uwp\package\Microsoft.VCLibs.x64.14.00.appx' -SdkVersion '10.0.22621.0' -ExpectedPublisher 'CN=EdenXboxDev' -ExpectedVersion $env:PACKAGE_VERSION
+          & $script -Package 'build-uwp\package\eden-xbox.appx' -Certificate 'build-uwp\package\eden-xbox.cer' -VCLibs 'build-uwp\package\Microsoft.VCLibs.x64.14.00.appx' -SdkVersion '10.0.26100.0' -ExpectedPublisher 'CN=EdenXboxDev' -ExpectedVersion $env:PACKAGE_VERSION
           if ($LASTEXITCODE -ne 0) { throw 'APPX validation failed.' }
           $out = 'build-uwp\package'
           $metadata = [ordered]@{
@@ -329,7 +335,7 @@ jobs:
             workflow_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             package_version = $env:PACKAGE_VERSION
             windows_runner = $env:ImageOS + ' ' + $env:ImageVersion
-            windows_sdk = '10.0.22621.0'
+            windows_sdk = '10.0.26100.0'
             publisher = 'CN=EdenXboxDev'
             signing_thumbprint = $env:SIGNING_THUMBPRINT
             validated_utc = [DateTime]::UtcNow.ToString('o')
