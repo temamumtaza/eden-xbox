@@ -36,11 +36,33 @@ if (-not (Test-Path (Join-Path $src "meson.build"))) {
     if ($actualHash -ne $MesaSha256.ToLowerInvariant()) {
         throw "Mesa $MesaVersion archive SHA-256 mismatch: expected $MesaSha256, got $actualHash"
     }
-    Write-Host "extracting $tarball ..."
-    # tar reports errors for the few symlinks in the tarball (CI files, not needed here): the check
-    # below is what decides whether extraction worked.
-    & tar.exe -xf $tarball -C $WorkDir 2>$null
-    if (-not (Test-Path (Join-Path $src "meson.build"))) { throw "extracting Mesa failed" }
+    $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    if (-not $sevenZip) {
+        $sevenZipPath = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+        if (Test-Path $sevenZipPath) { $sevenZip = Get-Command $sevenZipPath }
+    }
+    if (-not $sevenZip) { throw "7-Zip is required to extract the Mesa source archive" }
+
+    # Expand XZ and TAR separately. Windows tar.exe can spend an excessive amount of time writing
+    # Mesa's thousands of small source files on hosted runners; 7-Zip handles both archive layers.
+    $stage = Join-Path $WorkDir ".mesa-$MesaVersion-extract"
+    if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    New-Item -ItemType Directory -Force $stage | Out-Null
+    try {
+        Write-Host "decompressing Mesa $MesaVersion ..."
+        & $sevenZip.Source x -y -bso0 -bsp1 "-o$stage" $tarball
+        if ($LASTEXITCODE -gt 1) { throw "decompressing Mesa archive failed (7-Zip exit $LASTEXITCODE)" }
+        $mesaTar = Join-Path $stage "mesa-$MesaVersion.tar"
+        if (-not (Test-Path $mesaTar)) { throw "7-Zip did not produce the expected Mesa TAR archive" }
+
+        Write-Host "extracting Mesa source files ..."
+        & $sevenZip.Source x -y -bso0 -bsp1 "-o$WorkDir" $mesaTar
+        if ($LASTEXITCODE -gt 1) { throw "extracting Mesa TAR archive failed (7-Zip exit $LASTEXITCODE)" }
+        if (-not (Test-Path (Join-Path $src "meson.build"))) { throw "extracting Mesa failed" }
+    }
+    finally {
+        if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    }
 }
 
 # --- Local patches (idempotent) ---------------------------------------------------------------
