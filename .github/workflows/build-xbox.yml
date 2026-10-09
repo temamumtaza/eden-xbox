@@ -5,7 +5,12 @@ on:
     branches: [codex/xbox-ci-macos]
     paths-ignore:
       - .github/workflows/build-xbox.yml
+      - .github/workflows/prepare-xbox-release.yml
+      - README.md
+      - README.en.md
+      - README-developer.md
       - README-macos.md
+      - docs/xbox/community-release.md
       - docs/xbox/ci_macos_maintenance.md
       - tools/xbox/package-appx.ps1
       - tools/xbox/validate-appx.ps1

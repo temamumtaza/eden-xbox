@@ -104,10 +104,10 @@ jobs:
             echo "app_version=$(jq -r '.package_version' package/build-metadata.json)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Check out the exact source used by the package
+      - name: Check out the current release guides and assets
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.metadata.outputs.source_sha }}
+          ref: ${{ github.sha }}
           path: source
           fetch-depth: 1
           persist-credentials: false
@@ -117,6 +117,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ steps.metadata.outputs.source_sha }}
           BUILD_RUN_URL: ${{ steps.source.outputs.workflow_run_url }}
+          GUIDE_SHA: ${{ github.sha }}
           TAG_NAME: ${{ inputs.tag_name }}
           APP_VERSION: ${{ steps.metadata.outputs.app_version }}
         shell: bash
@@ -139,14 +140,16 @@ jobs:
           ## English
           Community preview for Xbox Series X|S Developer Mode. This release is signed, validated by
           GitHub Actions, and built from source commit \`${SOURCE_SHA}\` (package version \`${app_version}\`).
-          Download the single ZIP asset and follow \`README.en.md\` inside it. Game compatibility is
+          User guides and assets are from commit \`${GUIDE_SHA}\`. Download the single ZIP asset and
+          follow \`README.en.md\` inside it. Game compatibility is
           still in development; one Xbox Series S smoke test of Wild West Crops was reported to work.
           The package contains no Nintendo keys, firmware, or games.
 
           ## Bahasa Indonesia
           Preview komunitas untuk Xbox Series X|S Developer Mode. Rilis ini ditandatangani, divalidasi
           oleh GitHub Actions, dan dibangun dari commit \`${SOURCE_SHA}\` (versi paket \`${app_version}\`).
-          Unduh satu berkas ZIP lalu ikuti \`README.md\` di dalamnya. Kompatibilitas game masih dalam
+          Panduan pengguna dan aset berasal dari commit \`${GUIDE_SHA}\`. Unduh satu berkas ZIP lalu
+          ikuti \`README.md\` di dalamnya. Kompatibilitas game masih dalam
           pengembangan; satu uji coba Wild West Crops pada Xbox Series S dilaporkan berjalan.
           Paket ini tidak menyertakan keys, firmware, atau game Nintendo.
 
