@@ -152,7 +152,7 @@ jobs:
           $envText = & $env:ComSpec /d /s /c $probe 2>&1 | Out-String
           $libPath = [regex]::Match($envText, '(?im)^LIB=(.*)$').Groups[1].Value
           $platform = [regex]::Match($envText, '(?im)^VSCMD_ARG_APP_PLAT=(.*)$').Groups[1].Value
-          $selectedSdk = [regex]::Match($envText, '(?im)^WindowsSDKVersion=(.*)$').Groups[1].Value.TrimEnd('\')
+          $selectedSdk = [regex]::Match($envText, '(?im)^WindowsSDKVersion=(.*)$').Groups[1].Value.Trim().TrimEnd([char]92)
           if ($LASTEXITCODE -ne 0 -or $libPath -notmatch 'x64\\store' -or $platform -ne 'UWP' -or $selectedSdk -ne $env:EDEN_WINDOWS_SDK_VERSION) {
             $storeCrtFound = $libPath -match 'x64\\store'
             throw "vcvarsall failed its UWP toolchain preflight (Store CRT=$storeCrtFound; platform=$platform; SDK=$selectedSdk)."
