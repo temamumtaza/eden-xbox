@@ -2682,8 +2682,8 @@ de paquete de `691ae73e6f634f53919eba2bc98bdc9a88c35533`. Su `boot.cfg` seleccio
 `a56cbff40df77b6e`, cuyo par VS/PS falló 11 veces en el log rotado. La verificación local de
 checksum/manifest y la instalación por Device Portal confirmaron `0.3.0.29`; después se lanzó Eden.
 Este reempaquetado conserva el binario previo: sirve para capturar IR/SPIR-V con la opción que ya
-existía, pero aún no contiene el cambio English (US)/USA ni el callback nuevo de errores Mesa.
-Queda pendiente abrir Z-A con este paquete y recuperar el volcado antes de construir otra versión.
+existía, pero aún no contiene el cambio English (US)/USA ni el callback nuevo de errores Mesa. El VS
+seleccionado se recuperó después; la reproducción y el volcado Pixel están documentados abajo.
 
 La primera corrida de packaging-only (#38076888838) falló antes de crear el APPX: PowerShell recibió
 un array de cadenas como argumentos posicionales y trató `-SpirvToDxil` como valor de `RunSeconds`.
@@ -2697,3 +2697,39 @@ se limpia solo Mesa cuando `cache-matched-key` no coincide con esa huella. Con u
 sin cambios. La restauración separada de `actions/cache` expone la clave coincidente; la
 documentación de build detalla la migración. Aún falta comprobar este comportamiento en una corrida
 CI real y confirmar que el tiempo de Eden sigue siendo incremental.
+
+## Reproducción Z-A con el shader Pixel (11 oct 2026)
+
+El paquete diagnóstico `0.3.0.30` reutilizó el mismo binario sin firmar del workflow #24
+(`790cda073e56fa50d39ba554814ab8d4eed9e634`); el empaquetado #38078231435 solo añadió el hash
+`fa4b2ee1b67cfe3e` a `boot.cfg`. La APPX pasó la verificación de manifest, runtime y SHA-256, y el
+Device Portal registró la versión `0.3.0.30`. El script de despliegue esperó aunque el portal ya
+había informado éxito: durante la transición el listado contenía las versiones `.29` y `.30`, y
+`app_package()` seleccionó la primera coincidencia, que era `.29`. La consulta posterior encontró
+solo `.30` y el lanzamiento explícito de esa versión fue aceptado. No interpretar ese timeout como
+fallo de instalación; la selección por versión del helper queda pendiente de corregir.
+
+La captura del `.30` vuelve a mostrar 17 fallos de `eden_spirv_to_dxil_pipeline` antes de crear los
+PSO; 11 usan VS `a56cbff40df77b6e` + PS `fa4b2ee1b67cfe3e`, y seis usan VS `bb1937e482fff7f8` + PS
+`ffb21bdb2ee87c04`. Los logs activo y rotado repiten esos mismos pares. El renderizador registra
+los fallos y omite esos draws, consistente con las partes negras. No aparece `Critical` en el log
+`.30`. El `Critical` de ARM con PC guest `0x4` del log anterior `.29` no aparece en el `.30`, así
+que sigue siendo una señal separada y no reproducida en esta sesión.
+
+Se recuperó el módulo Pixel `fa4b2ee1b67cfe3e` (stage 4) junto al Vertex `a56cbff40df77b6e`
+(stage 0). Ambos tienen cabecera SPIR-V 1.3 y el recorrido local de palabras no encontró
+instrucciones truncadas ni longitudes incoherentes; no había `spirv-val` instalado, por lo que esto
+no equivale a validación formal. El Pixel declara `Layer` como entrada con `Geometry`; el Vertex
+declara `Layer` como salida. La especificación SPIR-V define esos usos para Fragment y Vertex, y el
+log de Xbox informa `VP/RT index without GS yes`. Esto hace menos probable que la causa sea un
+SPIR-V truncado o la falta de esa capacidad D3D12, pero no demuestra que Mesa 26.2.3 traduzca esos
+módulos correctamente. Fuentes: [Khronos, especificación SPIR-V](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
+y [Microsoft, semánticas HLSL](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics).
+
+El Xbox informa Shader Model 6.4, validador DXIL 1.8, waves de 64 lanes y la capacidad de layer
+anterior; el inicializador del camino D3D12 termina. La traducción sigue fallando en la API
+compuesta y la captura `.30` solo conserva el error genérico. Los cambios de diagnóstico en
+`tools/xbox/mesa/eden_pipeline.c` y la selección English (US)/USA en `uwp_boot.cpp` todavía no están
+en el binario instalado: los workflows de paquete-only #27, #28, #30 y #31 reutilizaron el artefacto
+compilado en `790cda`. Para conocer la etapa y el mensaje exacto de Mesa hace falta compilar la
+revisión actual; el artefacto existente no puede responderlo.
