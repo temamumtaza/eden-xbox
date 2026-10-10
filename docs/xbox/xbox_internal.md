@@ -2891,16 +2891,25 @@ la biblioteca, y registra el resultado en `eden_uwp_diag.txt`. El override solo 
 idioma global de Xbox. La API de Microsoft persiste esta preferencia y recomienda fijarla antes de
 cargar recursos ([ApplicationLanguages](https://learn.microsoft.com/en-us/uwp/api/windows.globalization.applicationlanguages?view=winrt-28000),
 [localización de recursos UWP](https://learn.microsoft.com/windows/uwp/app-resources/localize-strings-ui-manifest)).
-En el siguiente paquete, comprobar el footer de versión y ese diagnóstico separará un binario de UI
-viejo de los componentes nativos que siguen el idioma de Windows. El marcador ahora registra el
-valor solicitado y el valor leído de vuelta, o el error de WinRT. Para cada Mario, revisar además el
-índice real devuelto por `GetApplicationDesiredLanguage`; aún no hay una prueba visual y de log del
-mismo lanzamiento. Una segunda lectura del Device Portal confirmó `.37`; los logs siguen en la
-biblioteca/Z-A y no incluyen Mario Kart ni Wonder. El árbol de build exacto de `.37` ya está en la
-cache de Actions para el próximo cambio; el ahorro de tiempo del build incremental aún no se ha
-medido. Los cambios C++ y el marcador ya están publicados en `origin/xbox` (commit
-`65e5def94c`), pero siguen sin compilarse ni instalarse; pasan las once pruebas del analizador
-macOS y `git diff --check`, y falta el gate UWP/Series.
+En la siguiente build, comprobar el footer de versión y el override de `en-US` separa un binario de
+UI viejo de los componentes nativos que siguen el idioma de Windows. El marcador registra el valor
+solicitado y el leído de vuelta, o el error de WinRT. Para cada Mario hay que revisar también el
+índice real devuelto por `GetApplicationDesiredLanguage`; todavía falta una prueba visual y de log
+del mismo lanzamiento. El 11 oct, `verify-console` volvió a confirmar `.37`; la descarga
+`Downloads/EdenXboxLogs/20261011-language-after-user-report` muestra la app en la biblioteca con
+24 MiB de 1024 MiB y ningún arranque reciente de Mario Kart o Wonder. El log rotado disponible es de
+Z-A, por lo que no contradice el reporte visual de español y tampoco permite atribuirlo. La build
+`.38` (Actions run `38095596825`, commit `56bfa6c919`) está en curso; restauró la cache, pero aún no
+produjo ni instaló un paquete.
+
+La revisión del workflow confirmó que restaurar `build-uwp` no basta: el run anterior #37 compiló
+1342/1342 pasos Ninja porque `actions/checkout` actualiza las fechas de todos los archivos fuente.
+El cambio local `tools/xbox/normalize_cached_source_mtimes.py` compara el SHA guardado en la clave
+de cache y hace anteriores a los objetos solo los archivos tracked que no cambiaron, también en
+submódulos; los archivos editados conservan la fecha nueva. Si falta el commit o la clave no
+contiene un SHA, la normalización se omite y el build seguro puede ser completo. Las tres pruebas
+unitarias nuevas, las once pruebas del helper macOS, `py_compile` y `git diff --check` pasan; el
+workflow optimizado todavía no se ha ejecutado en Actions.
 
 Fuentes: [Microsoft, recursos del sistema para apps y juegos UWP en Xbox](https://learn.microsoft.com/en-us/previous-versions/windows/uwp/xbox-apps/system-resource-allocation),
 [Microsoft, Device Portal para Xbox](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/device-portal-xbox),

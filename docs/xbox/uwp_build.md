@@ -16,6 +16,14 @@ outputs](https://github.com/actions/cache/blob/v6.1.0/restore/action.yml)). Use 
 when you need a clean configuration; it skips the caches and configures Mesa from scratch. Meson
 documents the difference between [reconfiguring and wiping a build directory](https://mesonbuild.com/Configuring-a-build-directory.html).
 
+Restoring `build-uwp` alone is not enough for Ninja to reuse its objects: `actions/checkout` gives
+all checked-out sources fresh timestamps, so an unchanged cache can look entirely out of date. The
+workflow now compares the cached source SHA with the selected checkout and ages only unchanged
+tracked files in the main repository and its submodules; changed files keep their fresh timestamps
+and rebuild their dependents. If the cached SHA cannot be resolved, it leaves timestamps alone so
+the build remains safe and may run in full. This behavior is covered by
+`tools/xbox/tests/test_cache_source_mtimes.py`.
+
 The short install steps are in [README-macos.md](../../README-macos.md); signing, cache, rollback, and scheduled upstream maintenance are in [ci_macos_maintenance.md](ci_macos_maintenance.md).
 
 ## Capture one D3D12 guest shader

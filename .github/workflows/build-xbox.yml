@@ -100,7 +100,7 @@ jobs:
             .cache/cpm
             build-uwp
             ${{ runner.temp }}\mesa-build
-          key: ${{ runner.os }}-uwp26100-v2-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1') }}-${{ hashFiles('tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-${{ github.sha }}
+          key: ${{ runner.os }}-uwp26100-v2-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1') }}-${{ hashFiles('tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-${{ steps.source.outputs.sha }}
           # Prefer a tree with the same toolchain/configuration; the legacy prefix is migrated
           # conservatively by wiping only Mesa's build tree when its matched key is inspected.
           restore-keys: |
@@ -221,12 +221,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'NASM preflight failed.' }
           git --version
 
+      - name: Preserve cached Ninja outputs for unchanged source files
+        if: ${{ !inputs.clean_build && steps.cache.outputs.cache-matched-key != '' }}
+        shell: pwsh
+        env:
+          CACHE_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
+          CURRENT_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:CACHE_MATCHED_KEY -notmatch '-(?<sha>[0-9a-f]{40})$') {
+            Write-Warning 'Cached key has no source SHA; keeping checkout timestamps for a safe full rebuild.'
+            exit 0
+          }
+          python.exe tools/xbox/normalize_cached_source_mtimes.py `
+            --repo . `
+            --cached-sha $Matches.sha `
+            --current-sha $env:CURRENT_SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Preparing cached Ninja source timestamps failed.' }
+
       - name: Test deployment helper log summaries
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           python.exe tools/xbox/tests/test_eden_xbox_macos.py
           if ($LASTEXITCODE -ne 0) { throw 'Deployment helper log summary tests failed.' }
+          python.exe tools/xbox/tests/test_cache_source_mtimes.py
+          if ($LASTEXITCODE -ne 0) { throw 'Cached source timestamp tests failed.' }
 
       - name: Build SPIR-V to DXIL Store-CRT runtime
         shell: pwsh
