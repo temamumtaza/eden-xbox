@@ -28,13 +28,42 @@ $venv = Join-Path $WorkDir "venv"
 # --- Sources ---------------------------------------------------------------------------------
 if (-not (Test-Path (Join-Path $src "meson.build"))) {
     $tarball = Join-Path $WorkDir "mesa-$MesaVersion.tar.xz"
-    if (-not (Test-Path $tarball)) {
-        Write-Host "downloading Mesa $MesaVersion ..."
-        Invoke-WebRequest "https://archive.mesa3d.org/mesa-$MesaVersion.tar.xz" -OutFile $tarball
+    $archiveValid = $false
+    if (Test-Path $tarball) {
+        $cachedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tarball).Hash.ToLowerInvariant()
+        if ($cachedHash -eq $MesaSha256.ToLowerInvariant()) {
+            $archiveValid = $true
+        } else {
+            Write-Host "cached Mesa $MesaVersion archive has the wrong SHA-256; removing it."
+            Remove-Item -LiteralPath $tarball -Force
+        }
     }
-    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tarball).Hash.ToLowerInvariant()
-    if ($actualHash -ne $MesaSha256.ToLowerInvariant()) {
-        throw "Mesa $MesaVersion archive SHA-256 mismatch: expected $MesaSha256, got $actualHash"
+
+    if (-not $archiveValid) {
+        $archiveUrls = @(
+            "https://archive.mesa3d.org/mesa-$MesaVersion.tar.xz",
+            "https://sources.voidlinux.org/mesa-$MesaVersion/mesa-$MesaVersion.tar.xz"
+        )
+        $downloadErrors = [System.Collections.Generic.List[string]]::new()
+        foreach ($archiveUrl in $archiveUrls) {
+            try {
+                Write-Host "downloading Mesa $MesaVersion from $archiveUrl ..."
+                Invoke-WebRequest -Uri $archiveUrl -OutFile $tarball -TimeoutSec 300
+                $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tarball).Hash.ToLowerInvariant()
+                if ($actualHash -ne $MesaSha256.ToLowerInvariant()) {
+                    throw "SHA-256 mismatch: expected $MesaSha256, got $actualHash"
+                }
+                $archiveValid = $true
+                break
+            } catch {
+                Remove-Item -LiteralPath $tarball -Force -ErrorAction SilentlyContinue
+                $downloadErrors.Add("$archiveUrl : $($_.Exception.Message)")
+                Write-Warning "Mesa download failed; trying the next source."
+            }
+        }
+        if (-not $archiveValid) {
+            throw "Unable to download a verified Mesa $MesaVersion archive. $($downloadErrors -join '; ')"
+        }
     }
     $sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
     if (-not $sevenZip) {
