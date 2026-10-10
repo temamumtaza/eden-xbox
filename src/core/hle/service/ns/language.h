@@ -41,6 +41,8 @@ constexpr u32 GetSupportedLanguageFlag(const ApplicationLanguage lang) {
 }
 
 const ApplicationLanguagePriorityList* GetApplicationLanguagePriorityList(ApplicationLanguage lang);
+std::optional<ApplicationLanguage> SelectApplicationLanguage(
+    const ApplicationLanguagePriorityList& priority_list, u32 supported_languages);
 std::optional<ApplicationLanguage> ConvertToApplicationLanguage(Set::LanguageCode language_code);
 std::optional<Set::LanguageCode> ConvertToLanguageCode(ApplicationLanguage lang);
 } // namespace Service::NS

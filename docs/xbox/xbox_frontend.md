@@ -5,13 +5,14 @@ Se activa con `library=1` en `boot.cfg`; `-Library` en los scripts lo escribe.
 El arranque directo mediante `-Game` y los gates de homebrew se conservan.
 
 La interfaz propia del frontend UWP (biblioteca, ajustes, exploradores y menú de
-pausa) se muestra en inglés de EE. UU. El selector nativo de carpetas de Windows
-puede seguir el idioma de la consola. El idioma de la interfaz y el del Switch
-emulado son independientes: el arranque del juego fuerza `EnglishAmerican` y la
-región `USA` sin cambiar el idioma global de Xbox. Los reportes de Mario Kart 8 y
-Mario Wonder en español siguen pendientes de confirmar en el servicio de idioma
-que consulta cada juego; el próximo log registrará el idioma que Eden entrega al
-título.
+pausa) se muestra en inglés de EE. UU. Eden fija además la preferencia de recursos
+UWP a `en-US` durante la activación, antes de crear la biblioteca; esto solo afecta
+a Eden. El selector nativo de carpetas de Windows puede seguir el idioma de la
+consola. El idioma de la interfaz y el del Switch emulado son independientes: el
+arranque del juego fuerza `EnglishAmerican` y la región `USA` sin cambiar el idioma
+global de Xbox. El diagnóstico informa si el override UWP se aplicó y registra la
+preferencia de idioma que Eden calcula para cada título; Mario Kart 8 y Wonder aún
+requieren una ejecución por separado para confirmar lo que NS devuelve al juego.
 
 ## Carpeta y uso
 

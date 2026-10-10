@@ -208,17 +208,14 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationDesiredLanguage(
         R_THROW(Service::NS::ResultApplicationLanguageNotFound);
     }
 
-    // Try to find a valid language.
-    for (const auto lang : *priority_list) {
-        const auto supported_flag = GetSupportedLanguageFlag(lang);
-        if (supported_languages == 0 || (supported_languages & supported_flag) == supported_flag) {
-            *out_desired_language = lang;
-            LOG_INFO(Service_NS,
-                     "GetApplicationDesiredLanguage: requested system language index {} (code {:016X}); selected application language index {} from supported mask {:08X}",
-                     requested_language_index, static_cast<u64>(language_code),
-                     static_cast<u32>(lang), supported_languages);
-            R_SUCCEED();
-        }
+    const auto selected_language = SelectApplicationLanguage(*priority_list, supported_languages);
+    if (selected_language) {
+        *out_desired_language = *selected_language;
+        LOG_INFO(Service_NS,
+                 "GetApplicationDesiredLanguage: requested system language index {} (code {:016X}); selected application language index {} from supported mask {:08X}",
+                 requested_language_index, static_cast<u64>(language_code),
+                 static_cast<u32>(*selected_language), supported_languages);
+        R_SUCCEED();
     }
 
     LOG_ERROR(Service_NS, "Could not find a valid language! supported_languages={:08X}",

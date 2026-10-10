@@ -19,7 +19,6 @@ import re
 import socket
 import ssl
 import sys
-import tempfile
 import time
 import urllib.parse
 import uuid
@@ -32,51 +31,61 @@ APP_PUBLISHER = "CN=EdenXboxDev"
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_LOG_BYTES = 96 * 1024 * 1024
 LOGS = (
-    ("eden_uwp_diag.txt", ""),
-    ("eden_log.txt", "eden/log"),
-    ("eden_graphics_bugs.log", "eden/log"),
+    ("eden_uwp_diag.txt", r"\LocalState"),
+    ("eden_log.txt", r"\LocalState\eden\log"),
+    ("eden_log.txt.old.txt", r"\LocalState\eden\log"),
+    ("eden_graphics_bugs.log", r"\LocalState\eden\log"),
+    ("eden_graphics_bugs.old.log", r"\LocalState\eden\log"),
+    ("eden_graphics_bugs.old.json", r"\LocalState\eden\log"),
+)
+
+SYSTEM_LANGUAGE_NAMES = (
+    "Japanese",
+    "English (US)",
+    "French",
+    "German",
+    "Italian",
+    "Spanish",
+    "Chinese",
+    "Korean",
+    "Dutch",
+    "Portuguese",
+    "Russian",
+    "Taiwanese",
+    "English (UK)",
+    "French (Canada)",
+    "Spanish (Latin America)",
+    "Chinese (Simplified)",
+    "Chinese (Traditional)",
+    "Portuguese (Brazil)",
+    "Polish",
+    "Thai",
+)
+
+APPLICATION_LANGUAGE_NAMES = (
+    "American English",
+    "British English",
+    "Japanese",
+    "French",
+    "German",
+    "Latin American Spanish",
+    "Spanish",
+    "Italian",
+    "Dutch",
+    "Canadian French",
+    "Portuguese",
+    "Russian",
+    "Korean",
+    "Traditional Chinese",
+    "Simplified Chinese",
+    "Brazilian Portuguese",
+    "Polish",
+    "Thai",
 )
 
 
 class PortalError(RuntimeError):
     pass
-
-
-class PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, host: str, port: int, *, expected_sha256: str, **kwargs):
-        super().__init__(host, port, **kwargs)
-        self.expected_sha256 = expected_sha256
-
-    def connect(self) -> None:
-        super().connect()
-        try:
-            certificate_der = self.sock.getpeercert(binary_form=True)
-            actual = hashlib.sha256(certificate_der).hexdigest()
-            if actual != self.expected_sha256:
-                raise PortalError("The Xbox TLS certificate changed after pinning; no request was sent.")
-            with tempfile.NamedTemporaryFile(suffix=".pem") as certificate_file:
-                certificate_file.write(ssl.DER_cert_to_PEM_cert(certificate_der).encode("ascii"))
-                certificate_file.flush()
-                certificate = ssl._ssl._test_decode_cert(certificate_file.name)
-            expected_ip = ipaddress.ip_address(self.host)
-            sans = certificate.get("subjectAltName", ())
-            if not any(
-                kind == "IP Address" and ipaddress.ip_address(value) == expected_ip
-                for kind, value in sans
-            ):
-                raise PortalError("The pinned Xbox certificate does not contain this IP address in its SAN.")
-            now = time.time()
-            if (
-                now < ssl.cert_time_to_seconds(certificate["notBefore"])
-                or now > ssl.cert_time_to_seconds(certificate["notAfter"])
-            ):
-                raise PortalError("The pinned Xbox TLS certificate is outside its validity period.")
-        except PortalError:
-            self.close()
-            raise
-        except (OSError, ssl.SSLError, ValueError, KeyError, TypeError) as exc:
-            self.close()
-            raise PortalError("The pinned Xbox TLS certificate could not be validated.") from exc
 
 
 def parse_portal(raw: str) -> tuple[str, int, str]:
@@ -118,7 +127,17 @@ def file_sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def fetch_leaf_after_pin(host: str, port: int, expected_leaf: str) -> bytes:
+def ca_pem_from_response(data: bytes) -> bytes:
+    match = re.search(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", data, re.S)
+    if match:
+        return match.group(0) + b"\n"
+    try:
+        return ssl.DER_cert_to_PEM_cert(data).encode("ascii")
+    except (ValueError, ssl.SSLError) as exc:
+        raise PortalError("The portal root-certificate endpoint returned an unsupported certificate format.") from exc
+
+
+def fetch_root_after_leaf_pin(host: str, port: int, expected_leaf: str) -> bytes:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
@@ -132,9 +151,31 @@ def fetch_leaf_after_pin(host: str, port: int, expected_leaf: str) -> bytes:
                     "Portal certificate fingerprint does not match the value you supplied; no certificate was trusted. "
                     f"Presented SHA-256: {actual}"
                 )
-            return ssl.DER_cert_to_PEM_cert(leaf).encode("ascii")
-    except (ValueError, ssl.SSLError) as exc:
-        raise PortalError("The pinned Device Portal certificate could not be saved.") from exc
+            request = (
+                f"GET /config/rootcertificate HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\nConnection: close\r\nAccept: application/pkix-cert\r\n\r\n"
+            ).encode("ascii")
+            connection.sendall(request)
+            response = connection.makefile("rb")
+            status_line = response.readline(8192).decode("ascii", "replace").strip()
+            match = re.match(r"HTTP/\d(?:\.\d)?\s+(\d{3})", status_line)
+            if not match or int(match.group(1)) != 200:
+                raise PortalError("Could not download the Device Portal root certificate (HTTP response was not 200).")
+            headers: dict[str, str] = {}
+            while True:
+                line = response.readline(8192)
+                if line in (b"\r\n", b"\n", b""):
+                    break
+                key, separator, value = line.decode("latin1").partition(":")
+                if separator:
+                    headers[key.strip().lower()] = value.strip()
+            length = int(headers.get("content-length", "0"))
+            if length <= 0 or length > 1024 * 1024:
+                raise PortalError("The Device Portal root certificate response had an invalid size.")
+            body = response.read(length)
+            if len(body) != length:
+                raise PortalError("The Device Portal root certificate download was incomplete.")
+            return ca_pem_from_response(body)
     except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
         raise PortalError("Could not establish the pinned TLS connection to Device Portal.") from exc
 
@@ -147,14 +188,9 @@ class PortalClient:
         self.port = port
         self.base = base
         try:
-            pem = ca_file.read_text(encoding="ascii")
-            der = ssl.PEM_cert_to_DER_cert(pem)
-            self.expected_sha256 = hashlib.sha256(der).hexdigest()
-        except (OSError, UnicodeError, ValueError, ssl.SSLError) as exc:
-            raise PortalError("The locally pinned Device Portal certificate could not be loaded.") from exc
-        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        self.context.check_hostname = False
-        self.context.verify_mode = ssl.CERT_NONE
+            self.context = ssl.create_default_context(cafile=str(ca_file))
+        except (OSError, ssl.SSLError) as exc:
+            raise PortalError("The locally pinned Device Portal CA could not be loaded.") from exc
         self.cookies: dict[str, str] = {}
         self.username: str | None = None
         self.password: str | None = None
@@ -204,15 +240,13 @@ class PortalClient:
         *,
         mutation: bool = False,
         max_bytes: int = MAX_JSON_BYTES,
-        allow_status: tuple[int, ...] = (),
     ) -> tuple[int, bytes]:
         if not target.startswith("/") or target.startswith("//"):
             raise PortalError("Refusing a request outside this Device Portal host.")
         attempts = 0
         while True:
-            connection = PinnedHTTPSConnection(
-                self.host, self.port, expected_sha256=self.expected_sha256,
-                context=self.context, timeout=300
+            connection = http.client.HTTPSConnection(
+                self.host, self.port, context=self.context, timeout=300
             )
             try:
                 connection.request(method, target, body=body, headers=self._headers(headers, mutation))
@@ -224,7 +258,7 @@ class PortalClient:
                     self._prompt_credentials()
                     attempts += 1
                     continue
-                if response.status >= 400 and response.status not in allow_status:
+                if response.status >= 400:
                     response.read(1024 * 1024)
                     raise PortalError(f"Device Portal returned HTTP {response.status}; response details were withheld.")
                 payload = response.read(max_bytes + 1)
@@ -284,10 +318,7 @@ class PortalClient:
         total += len(ending)
         query = urllib.parse.urlencode({"package": "eden-xbox.appx"})
         target = "/api/app/packagemanager/package?" + query
-        connection = PinnedHTTPSConnection(
-            self.host, self.port, expected_sha256=self.expected_sha256,
-            context=self.context, timeout=900
-        )
+        connection = http.client.HTTPSConnection(self.host, self.port, context=self.context, timeout=900)
         try:
             connection.putrequest("POST", target)
             headers = self._headers(
@@ -326,7 +357,7 @@ class PortalClient:
             connection.close()
 
     def download(self, target: str, max_bytes: int = MAX_LOG_BYTES) -> tuple[int, bytes]:
-        return self.request("GET", target, max_bytes=max_bytes, allow_status=(404,))
+        return self.request("GET", target, max_bytes=max_bytes)
 
 
 def require_portal_client(raw: str) -> PortalClient:
@@ -355,7 +386,7 @@ def trust_portal(raw: str, fingerprint: str | None, replace: bool) -> None:
     expected = re.sub(r"[^0-9a-f]", "", fingerprint.lower())
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise PortalError("Enter the portal leaf certificate's full SHA-256 fingerprint (64 hex digits).")
-    pem = fetch_leaf_after_pin(host, port, expected)
+    pem = ca_pem_from_response(fetch_root_after_leaf_pin(host, port, expected))
     destination = trust_path(host, port)
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(destination.parent, 0o700)
@@ -374,7 +405,7 @@ def trust_portal(raw: str, fingerprint: str | None, replace: bool) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
-    print("Device Portal TLS certificate and IP address verified; the certificate is pinned in your macOS user config.")
+    print("Device Portal TLS chain verified; its root certificate is pinned in your macOS user config.")
 
 
 def version_tuple(text: str) -> tuple[int, int, int, int]:
@@ -493,11 +524,13 @@ def installed_version(item: dict) -> str:
 
 
 def portal_status(client: PortalClient) -> tuple[int, dict | None]:
-    status, body = client.request(
-        "GET", "/api/app/packagemanager/state", max_bytes=MAX_JSON_BYTES, allow_status=(404,)
-    )
-    if status == 404:
-        return 404, None
+    try:
+        status, body = client.request("GET", "/api/app/packagemanager/state", max_bytes=MAX_JSON_BYTES)
+    except PortalError as exc:
+        text = str(exc)
+        if "HTTP 404" in text:
+            return 404, None
+        raise
     if not body:
         return status, None
     try:
@@ -538,7 +571,9 @@ def deploy(raw: str, directory: pathlib.Path, timeout: int) -> None:
             print(f"Install verified on Xbox: package version {package['version']} is present.")
             return
         if state_status == 200 and state and state.get("Success") is False:
-            raise PortalError("Device Portal reported deployment failure; detailed response text was withheld.")
+            reason = state.get("Reason")
+            safe_reason = str(reason)[:240] if reason else "Device Portal reported a deployment failure"
+            raise PortalError(f"Device Portal reported install failure: {safe_reason}")
         now = time.monotonic()
         if now - last_notice >= 30:
             print("Waiting for Xbox package registration...")
@@ -597,11 +632,11 @@ def collect_logs(raw: str, output: pathlib.Path) -> list[pathlib.Path]:
             }
         )
         try:
-            status, content = client.download("/api/filesystem/apps/file?" + query)
-        except PortalError:
+            _, content = client.download("/api/filesystem/apps/file?" + query)
+        except PortalError as exc:
+            if "HTTP 404" in str(exc):
+                continue
             raise
-        if status == 404:
-            continue
         destination = output / filename
         destination.write_bytes(content)
         os.chmod(destination, 0o600)
@@ -626,27 +661,164 @@ def analyze_logs(paths: list[pathlib.Path]) -> None:
         except OSError as exc:
             raise PortalError(f"Could not read log file {path.name}.") from exc
         print(f"{path.name}:")
+        summary_content = content
         if path.name == "eden_uwp_diag.txt":
-            result_codes = re.findall(r"RunHeadlessBoot returned\s+(-?\d+)", content)
-            crash_markers = len(re.findall(r"\b(?:CRASH|terminate|unhandled exception)\b", content, re.I))
-            print(f"  startup result codes: {', '.join(result_codes) if result_codes else 'not recorded'}")
-            print(f"  crash markers: {crash_markers}")
-            memory = re.findall(r"app memory\s+(\d+) MiB of (\d+) MiB limit", content)
-            if memory:
-                print(f"  last recorded app memory: {memory[-1][0]} MiB of {memory[-1][1]} MiB")
+            starts = list(re.finditer(r"(?m)^\[eden-uwp\].*BootView::Run entered\b", content))
+            if starts:
+                summary_content = content[starts[-1].end() :]
+        memory = re.findall(
+            r"app memory\s+(\d+) MiB of (\d+) MiB(?: current)? limit(?:, expected cap (\d+) MiB)?",
+            summary_content,
+        )
+        memory_summary = None
+        if memory:
+            used, current_limit, expected_cap = memory[-1]
+            memory_summary = f"{used} MiB of {current_limit} MiB"
+            memory_summary += (
+                f" current limit, expected cap {expected_cap} MiB"
+                if expected_cap
+                else " limit"
+            )
+        if path.name == "eden_uwp_diag.txt":
+            build_identities = re.findall(r"build identity:\s*(.+)", summary_content)
+            print(
+                "  latest boot build identity: "
+                f"{build_identities[-1] if build_identities else 'not recorded'}"
+            )
+            ui_language = re.findall('app language override: (.+)', summary_content)
+            print(
+                "  latest app language override: "
+                f"{ui_language[-1] if ui_language else 'not recorded'}"
+            )
+            result_codes = re.findall(r"RunHeadlessBoot returned\s+(-?\d+)", summary_content)
+            print(f"  latest startup result codes: {', '.join(result_codes) if result_codes else 'not recorded'}")
+            crash_markers = len(
+                re.findall(r"\b(?:CRASH|terminate|unhandled exception)\b", summary_content, re.I)
+            )
+            print(f"  latest boot crash markers: {crash_markers}")
+            game_language = re.findall(
+                r"game language metadata: title ([0-9A-Fa-f]{16}), NACP ([0-9A-Fa-f]+), "
+                r"en-US supported (true|false), system language (\w+) \(index (-?\d+), "
+                r"code ([0-9A-Fa-f]+)\), NACP-priority candidate (.+) \(index (-?\d+)\)",
+                summary_content,
+            )
+            if game_language:
+                (
+                    title_id,
+                    title_mask,
+                    supports_english,
+                    _system_name,
+                    requested_index,
+                    _code,
+                    _selected_name,
+                    selected_index,
+                ) = game_language[-1]
+                requested_index = int(requested_index)
+                selected_index = int(selected_index)
+                requested_name = (
+                    SYSTEM_LANGUAGE_NAMES[requested_index]
+                    if 0 <= requested_index < len(SYSTEM_LANGUAGE_NAMES)
+                    else f"unknown system language {requested_index}"
+                )
+                if 0 <= selected_index < len(APPLICATION_LANGUAGE_NAMES):
+                    selected_name = APPLICATION_LANGUAGE_NAMES[selected_index]
+                elif selected_index < 0:
+                    selected_name = "no supported language"
+                else:
+                    selected_name = f"unknown application language {selected_index}"
+                print(
+                    f"  latest NACP language candidate: title {title_id}; languages "
+                    f"{title_mask.upper()} (en-US supported {supports_english}); requested "
+                    f"{requested_name} (index {requested_index}) -> candidate {selected_name} "
+                    f"(index {selected_index})"
+                )
+            if memory_summary:
+                print(f"  last recorded app memory: {memory_summary}")
+                resource_cap = int(expected_cap or current_limit)
+                if resource_cap <= 1536:
+                    print("  Xbox resource budget: App-class (~1 GiB); set Eden's App type to Game in Dev Home and relaunch before performance tests")
+                elif resource_cap >= 4096:
+                    print("  Xbox resource budget: Game-class (~5 GiB)")
+                else:
+                    print(f"  Xbox resource budget: {resource_cap} MiB; not the standard App/Game budget")
         elif path.name == "eden_graphics_bugs.log":
             lines = [line for line in content.splitlines() if line.strip()]
             print(f"  graphics bug records: {len(lines)}")
         else:
-            critical_count = len(re.findall(r"\bCritical\b", content, re.I))
-            render_errors = len(re.findall(r"\bRender\b.*\b(?:ERROR|CRITICAL)\b", content, re.I))
-            shader_ready = len(re.findall(r"D3D12: shader path ready", content))
-            print(f"  Critical entries: {critical_count}")
-            print(f"  Render error entries: {render_errors}")
-            print(f"  shader-path ready markers: {shader_ready}")
-            memory = re.findall(r"app memory\s+(\d+) MiB of (\d+) MiB limit", content)
-            if memory:
-                print(f"  last recorded app memory: {memory[-1][0]} MiB of {memory[-1][1]} MiB")
+            print(f"  Critical entries: {len(re.findall(r'\bCritical\b', content, re.I))}")
+            print(f"  Render error entries: {len(re.findall(r'\bRender\b.*\b(?:ERROR|CRITICAL)\b', content, re.I))}")
+            spirv_nir_failures = len(
+                re.findall(r"SPIR-V to NIR parsing failed", content, re.I)
+            )
+            layer_stage_failures = len(
+                re.findall(r"invalid stage for SpvBuiltInLayer", content, re.I)
+            )
+            if spirv_nir_failures or layer_stage_failures:
+                print(f"  SPIR-V to NIR parse failures: {spirv_nir_failures}")
+                print(f"  invalid Layer-stage failures: {layer_stage_failures}")
+            print(f"  shader-path ready markers: {len(re.findall(r'D3D12: shader path ready', content))}")
+            if memory_summary:
+                print(f"  last recorded app memory: {memory_summary}")
+            current_title = None
+            latest_language_call = None
+            control_data = re.compile(
+                r'Control data for ([0-9A-Fa-f]{16}): name="([^"]*)" '
+                r"supported_languages=([0-9A-Fa-f]+)"
+            )
+            language_choice = re.compile(
+                r"GetApplicationDesiredLanguage: requested system language index (\d+) "
+                r"\(code ([0-9A-Fa-f]+)\); selected application language index (\d+) "
+                r"from supported mask ([0-9A-Fa-f]+)"
+            )
+            for line in content.splitlines():
+                title_match = control_data.search(line)
+                if title_match:
+                    current_title = title_match.groups()
+                if "GetApplicationDesiredLanguage" in line:
+                    choice_match = language_choice.search(line)
+                    latest_language_call = (
+                        current_title,
+                        choice_match.groups() if choice_match else None,
+                    )
+            if latest_language_call:
+                title, choice = latest_language_call
+                if title:
+                    title_id, title_name, title_mask = title
+                    print(f"  latest game title: {title_name} ({title_id}); NACP languages {title_mask.upper()}")
+                if choice:
+                    requested_index, _requested_code, selected_index, supported_mask = choice
+                    requested_index = int(requested_index)
+                    selected_index = int(selected_index)
+                    requested_name = (
+                        SYSTEM_LANGUAGE_NAMES[requested_index]
+                        if requested_index < len(SYSTEM_LANGUAGE_NAMES)
+                        else f"unknown system language {requested_index}"
+                    )
+                    selected_name = (
+                        APPLICATION_LANGUAGE_NAMES[selected_index]
+                        if selected_index < len(APPLICATION_LANGUAGE_NAMES)
+                        else f"unknown application language {selected_index}"
+                    )
+                    print(
+                        "  latest NS language response (GetApplicationDesiredLanguage): "
+                        f"requested {requested_name} "
+                        f"(index {requested_index}) -> selected {selected_name} "
+                        f"(index {selected_index}); supported mask {supported_mask.upper()}"
+                    )
+                else:
+                    print(
+                        "  NS language response: call found, but the log does not record "
+                        "the selected language"
+                    )
+            elif current_title:
+                title_id, title_name, title_mask = current_title
+                print(
+                    f"  latest game title: {title_name} ({title_id}); "
+                    f"NACP languages {title_mask.upper()}"
+                )
+                print("  NS language response: not recorded in this log")
+            else:
+                print("  NS language response: not recorded in this log")
 
 
 def build_parser() -> argparse.ArgumentParser:

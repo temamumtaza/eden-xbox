@@ -409,6 +409,17 @@ const ApplicationLanguagePriorityList* GetApplicationLanguagePriorityList(
     }
 }
 
+std::optional<ApplicationLanguage> SelectApplicationLanguage(
+    const ApplicationLanguagePriorityList& priority_list, const u32 supported_languages) {
+    for (const auto language : priority_list) {
+        const u32 supported_flag = GetSupportedLanguageFlag(language);
+        if (supported_languages == 0 || (supported_languages & supported_flag) == supported_flag) {
+            return language;
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<ApplicationLanguage> ConvertToApplicationLanguage(
     const Set::LanguageCode language_code) {
     switch (language_code) {

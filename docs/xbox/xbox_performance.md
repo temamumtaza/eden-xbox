@@ -45,6 +45,16 @@ exclusivos y dos compartidos. Por eso los budgets de la app y Game mode importan
 el total de RAM fisica de Series a la app. El PC de la ultima prueba alcanzo 4942 MiB usados,
 pero su limite difiere del de Xbox. No afirmar que el mismo pico quepa en la consola.
 
+El 11 oct 2026, la captura de Eden incluyo una sesion anterior con limite de `5120 MiB` y un arranque
+posterior con limite actual/esperado de `1024 MiB`; este ultimo confirma que esa activacion recibio
+recursos de **App**. Device Portal reporto `DefaultUWPContentTypeToGame=false`, que solo es el valor
+predeterminado global y no informa sobre una excepcion de Eden en Dev Home. Microsoft documenta 1 GB
+para Apps y 5 GB para Games. Establecer el tipo por paquete en Dev Home y verificar el limite de la
+sesion de gameplay antes de certificar FPS, presion de memoria o compatibilidad de juegos grandes.
+El tipo de recursos tambien cambia las asignaciones de CPU y GPU, no solo RAM. El ajuste global del
+Device Portal es una alternativa para todos los UWP, requiere reinicio y no es necesario si el control
+individual de Eden esta disponible.
+
 La prioridad Critical de CPU/GPU y VeryHigh de timing/vsync ya estan en el codigo. El helper
 SetCurrentThreadToPerformanceCores solo aplica a Android actualmente, pero eso no demuestra
 un fallo en Series, con cores homogeneos. No fijar mascaras arbitrarias ni elevar prioridades

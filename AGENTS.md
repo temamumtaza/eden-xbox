@@ -142,7 +142,7 @@ de PPTC host. Detalles en xbox_performance.md; Series pendiente, sin commit.
    - Empaqueta con `tools\xbox\package-appx.ps1 -BootNro tools\xbox\boot_nro\boot.nro`.
    - Archiva `eden-uwp.exe` y `eden-uwp.pdb` en `build-uwp\symbols\<versión>\`.
 4. **El usuario instala en la Series:**
-   - Instala `build-uwp\package\eden-xbox.appx` por el Device Portal y pone la app en modo **Game**.
+   - Instala `build-uwp\package\eden-xbox.appx` por el Device Portal. En Dev Home, abre los detalles del mosaico Eden y establece **UWP → App type → Game**; vuelve a comprobarlo después de actualizar el paquete y confirma el presupuesto de memoria en el log de esa sesión. Si el control por app no está disponible, **Settings → Preferences → Treat UWP apps as games by default** es una alternativa global que afecta a todos los UWP y requiere reinicio.
    - Después deja `eden_log.txt` y `eden_uwp_diag.txt` en su carpeta **Descargas**
      (`C:\Users\julia\Downloads`) y te dice cómo se vio.
 5. **Tú revisas los archivos:**

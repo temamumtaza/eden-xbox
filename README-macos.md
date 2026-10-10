@@ -22,13 +22,13 @@ This fork builds the Xbox UWP package on a hosted Windows runner. No Windows PC,
        python3 eden-xbox-macos.py deploy --portal https://<XBOX-IP>:11443 --artifact-dir "$HOME/Downloads/eden-xbox-series-s-folder"
 
    The helper verifies the listed SHA-256 hashes, confirms the package identity and runtime files, and uses the Device Portal session cookie and CSRF header over certificate-verified HTTPS. It never uninstalls the existing package. If Device Portal authentication is enabled, it asks for credentials in Terminal and hides password input; it does not save them.
-4. In Device Portal, set Eden to Game mode, then launch it. The first launch opens the library; this artifact includes no keys, firmware, or games.
+4. In Dev Home, highlight Eden, press the controller's **View** button (two overlapping squares), open **View details**, and set **UWP → App type** to **Game**. This changes Eden's resource class only. Relaunch it and confirm the current memory limit in its log. Microsoft documents 1 GB for foreground Apps and 5 GB for Games. Recheck this designation after package updates. If Dev Home does not expose the per-app type, the Device Portal fallback is **Settings → Preferences → Treat UWP apps as games by default**; that global option affects every UWP package and requires an Xbox restart. On first launch, Eden opens to the library; this artifact contains no keys, firmware, or games.
 5. Pull startup logs when needed:
 
        python3 eden-xbox-macos.py logs --portal https://<XBOX-IP>:11443
        python3 eden-xbox-macos.py analyze-logs "$HOME/Downloads/EdenXboxLogs/eden_uwp_diag.txt" "$HOME/Downloads/EdenXboxLogs/eden_log.txt" "$HOME/Downloads/EdenXboxLogs/eden_graphics_bugs.log"
 
-The log summary prints counts and memory measurements, not raw log contents. See docs/xbox/xbox_deploy.md for troubleshooting and Game Mode details.
+The log summary prints counts and memory measurements, identifies an App-class versus Game-class budget, and attributes the latest guest-language choice to the nearest title record when available, without printing raw log contents. See docs/xbox/xbox_deploy.md for troubleshooting and the Xbox app-resource setting.
 
 ## Rebuild or roll back
 

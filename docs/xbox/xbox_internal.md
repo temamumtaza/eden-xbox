@@ -78,8 +78,14 @@ tools\xbox\build-env.bat ninja -C build-uwp src/video_core/CMakeFiles/video_core
 ### Probar en la Series
 1. Abrir el Device Portal en `https://<ip-xbox>:11443`.
 2. Instalar el appx junto con la dependencia VCLibs.
-3. Poner la app en modo **Game**. Sin eso el límite de memoria es mucho menor.
-4. Ejecutarla y recoger `eden_uwp_diag.txt` y `eden_log.txt`. Los dejamos en `Descargas`.
+3. En Dev Home, resaltar Eden, pulsar **View**, abrir **View details** y establecer **UWP → App type → Game**.
+   Es el ajuste por paquete; volver a comprobarlo después de una actualización y relanzar Eden.
+   Confirmar el límite real en el log. Microsoft documenta 1 GB para Apps y 5 GB para Games.
+4. Si Dev Home no ofrece el control por paquete, Device Portal tiene **Settings → Preferences → Treat UWP apps as games by default**.
+   Es una alternativa global para todos los paquetes UWP y requiere reiniciar la consola; no reiniciar si hay
+   otra app/juego en uso.
+5. Ejecutar Eden y recoger `eden_uwp_diag.txt` y `eden_log.txt`. Confirmar el límite reportado en el
+   arranque actual; no asumir que el ajuste se aplicó solo por el nombre/categoría del paquete.
 
 Qué buscar en esos archivos:
 - En el diag: `RunHeadlessBoot returned 0`.
@@ -2791,7 +2797,144 @@ traducción de esos shaders, la creación de PSO y la prueba visual en la Series
 arreglo del spinner no se considera demostrado hasta repetir la escena. Mantener separado el error
 de lectura no mapeada hasta identificar el acceso invitado y su uso.
 
+El 11 oct se volvieron a recuperar de LocalState los módulos de esos hashes. El VS `a56cbff40df77b6e`
+tiene 2.416 bytes, modelo Vertex, SPIR-V 1.3, 145 instrucciones y declara capability 5254 junto con
+`BuiltIn Layer`; el PS `fa4b2ee1b67cfe3e` tiene 3.980 bytes, modelo Fragment, SPIR-V 1.3, 231
+instrucciones y recibe `BuiltIn Layer`. Un recorrido local de límites de instrucciones no encontró
+truncamientos; no equivale a `spirv-val` ni prueba que Mesa traduzca o que el PSO sea válido. Los dumps
+permanecen fuera del repositorio.
+
 Fuentes: [SPIR-V EXT_shader_viewport_index_layer](https://github.khronos.org/SPIRV-Registry/extensions/EXT/SPV_EXT_shader_viewport_index_layer.html),
 [Mesa `vtn_variables.c`](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/%2B/5ec01259be367766c2bd1aad4fcef49e79c4c574/src/compiler/spirv/vtn_variables.c),
 [Mesa DXIL signature mapping](https://fossies.org/dox/mesa-26.1.8/dxil__signature_8c_source.html) y
 [Microsoft HLSL semantics](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics).
+
+## Idioma de Mario Kart/Wonder y clasificación de recursos UWP (11 oct 2026)
+
+El usuario informa que Mario Kart 8 Deluxe y Mario Wonder aún aparecen en español. En la última
+captura, `eden_log.txt` activo estaba vacío y el arranque más reciente de `eden_uwp_diag.txt` quedó en
+la biblioteca, esperando selección de juego. Un segmento previo registró un juego en ejecución, pero
+su log rotado solo contiene la llamada antigua de NS con máscara `000070FD`, soporte de en-US y sistema
+`EnglishAmerican`; no contiene el idioma seleccionado. No usarlo como resultado actual de ninguno de
+los dos títulos. La rama fija inglés estadounidense y región USA antes de inicializar el sistema, y
+`GetApplicationDesiredLanguage` registra la selección en el log nuevo; probar cada título por separado.
+Si NS selecciona `AmericanEnglish` (índice 0) pero la interfaz del juego queda española, revisar
+preferencias guardadas, versión/actualización y datos del dump antes de borrar cualquier dato.
+
+El archivo archivado `0.3.0.35/eden_log.txt.old.txt` sí identifica a Super Mario Bros. Wonder y registra
+la máscara NACP `0000FFFF` y `system language SpanishLatin`; la máscara incluye American English, así
+que la selección española corresponde al ajuste emulado anterior. Es evidencia de la versión anterior,
+no una contradicción del cambio incluido en `.37`. Device Portal confirmó que `.37` está instalada,
+pero la captura más reciente termina en la biblioteca y el log activo no contiene una ejecución posterior
+de Wonder o Mario Kart 8 Deluxe.
+Por tanto, queda pendiente una prueba individual de cada título en `.37`; no cambiar otra vez la
+configuración de idioma ni reconstruir hasta leer `requested system language` y `selected application
+language` de esa ejecución. El frontend UWP del código actual contiene textos ingleses directos.
+
+El analizador ahora enlaza la última llamada de NS con el registro `Control data` de su título más cercano.
+Al aplicarlo a la captura nueva, la llamada antigua sin índice seleccionado corresponde a Pokémon Legends:
+Z-A (`0100F43008C44000`), no a Mario Kart ni a Wonder. Las ocho pruebas del helper cubren atribución del
+título más reciente, traducción de English/Spanish, el log antiguo sin selección y presupuestos App/Game.
+
+La Actions run #37 (`38087483293`) construyó Mesa `spirv_to_dxil`, `eden-uwp` y el paquete firmado desde
+`dbfc56a446c91f33cb6f0aab9a01baa0855baf5e`; el Device Portal confirma que `0.3.0.37` está instalado.
+Por tanto, la capability de `Layer` y el registro de idioma sí están dentro del paquete actual. Falta
+el gate de gameplay posterior a esa instalación para verificar la traducción y la selección de idioma.
+
+La última secuencia de arranque registra una sesión previa con límite de `5120 MiB` y después una
+activación nueva con `1024 MiB`; esta última es la clase de recursos efectiva para el arranque actual
+y corresponde a **App**. Device Portal `GET /ext/settings` mostró
+`DefaultUWPContentTypeToGame=false`, que solo describe el valor predeterminado global; no revela si
+Eden tiene una excepción por paquete en Dev Home. Microsoft documenta 1 GB para Apps y 5 GB para
+Games. Primero establecer Eden como **Game** en Dev Home y confirmar el límite en la sesión nueva.
+La opción global Device Portal **Settings → Preferences → Treat UWP apps as games by default** afecta
+a todos los paquetes UWP y requiere reiniciar; reservarla para el caso en que Dev Home no tenga el
+control individual y el usuario quiera cambiar el valor global. No certificar rendimiento con el
+límite histórico de 5120 MiB si el juego probado se ejecutó con 1024 MiB.
+
+La consulta de Device Portal del 11 oct confirma que `0.3.0.37` sigue instalado. Una descarga nueva de
+los seis logs vuelve a mostrar que la activación más reciente quedó en la biblioteca con 24 MiB de un
+límite de 1024 MiB; no contiene ejecución de Mario Kart ni de Wonder en `.37`. En ese conjunto, Wonder
+solo aparece en `.30` y Mario Kart no aparece. El archivo `.35` preservado de la captura anterior sí
+registra Wonder, pero con la antigua selección SpanishLatin. Esto no invalida el reporte visual del
+usuario; no vincula aún la sesión reportada al ajuste y al código de selección de idioma de `.37`.
+Próximo gate: capturar ambos juegos en `.37` y comprobar por separado el índice de sistema solicitado,
+el `ApplicationLanguage` elegido y el idioma que se ve en pantalla.
+
+Una segunda descarga en respuesta al nuevo reporte de que Kart y Wonder siguen en español encontró la
+misma limitación de evidencia: la activación actual ya estaba de vuelta en la biblioteca, el log activo
+estaba vacío y el rotado solo contiene Z-A; el diagnóstico histórico muestra Galaxy 2 seleccionado,
+pero no una ejecución de Kart o Wonder. Por eso el reporte del jugador sigue siendo el resultado visual
+válido, aunque la causa todavía no se puede localizar. El helper local ahora resume también la línea
+`game language` del diagnóstico nuevo, para mostrar título, máscara NACP, idioma de sistema pedido y
+selección prevista por NS cuando se recojan logs de una futura build que incluya esos cambios.
+
+En la continuación se verificó de nuevo que el Device Portal instala `.37` y que Actions run #37 salió
+del mismo `dbfc56a446c91f33cb6f0aab9a01baa0855baf5e`. La descarga de logs sigue sin enlazar las pruebas
+reportadas de Mario: `eden_log.txt` está vacío y el archivo rotado corresponde a Z-A. El diagnóstico
+UWP contiene selecciones anteriores de Wonder y Galaxy 2, pero no registra el idioma mostrado en esas
+sesiones. Por eso aún no se puede atribuir el español a Eden, a una preferencia del título o a sus datos.
+
+El cambio local para el próximo paquete es diagnóstico: `SelectApplicationLanguage` pasa a ser la
+misma función compartida por el servicio NS y el frontend. Al cargar un título, `eden_uwp_diag.txt`
+registrará su ID, máscara NACP, idioma de sistema, selección calculada por el algoritmo NS y el hash
+de build. No cambia la preferencia en-US ni demuestra que el título la use; requiere compilar e iniciar
+cada Mario para probarlo. No se inició otra build larga ni se instaló este cambio.
+
+En la continuación, `verify-console` confirmó otra vez que el paquete instalado es `.37`. El código
+de esa revisión ya tiene las etiquetas de la biblioteca escritas en inglés y el manifiesto declara
+`en-us`; el screenshot anterior, que muestra `.18`, no prueba el idioma de la UI de `.37`. El juego
+sigue siendo reportado en español, pero los logs descargados no contienen una ejecución reciente de
+Kart ni Wonder. Para hacer explícita también la selección de recursos UWP, el cambio local llama a
+`ApplicationLanguages::PrimaryLanguageOverride("en-US")` desde `BootView::Initialize`, antes de crear
+la biblioteca, y registra el resultado en `eden_uwp_diag.txt`. El override solo afecta a Eden, no al
+idioma global de Xbox. La API de Microsoft persiste esta preferencia y recomienda fijarla antes de
+cargar recursos ([ApplicationLanguages](https://learn.microsoft.com/en-us/uwp/api/windows.globalization.applicationlanguages?view=winrt-28000),
+[localización de recursos UWP](https://learn.microsoft.com/windows/uwp/app-resources/localize-strings-ui-manifest)).
+En el siguiente paquete, comprobar el footer de versión y ese diagnóstico separará un binario de UI
+viejo de los componentes nativos que siguen el idioma de Windows. El marcador ahora registra el
+valor solicitado y el valor leído de vuelta, o el error de WinRT. Para cada Mario, revisar además el
+índice real devuelto por `GetApplicationDesiredLanguage`; aún no hay una prueba visual y de log del
+mismo lanzamiento. Una segunda lectura del Device Portal confirmó `.37`; los logs siguen en la
+biblioteca/Z-A y no incluyen Mario Kart ni Wonder. El árbol de build exacto de `.37` ya está en la
+cache de Actions para el próximo cambio; el ahorro de tiempo del build incremental aún no se ha
+medido. Los cambios C++ y el marcador permanecen locales, sin compilar ni instalar; pasan las once
+pruebas del analizador macOS y `git diff --check`, y falta el gate UWP/Series.
+
+Fuentes: [Microsoft, recursos del sistema para apps y juegos UWP en Xbox](https://learn.microsoft.com/en-us/previous-versions/windows/uwp/xbox-apps/system-resource-allocation),
+[Microsoft, Device Portal para Xbox](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/device-portal-xbox),
+[Nintendo, el juego usa el idioma de la consola cuando lo admite](https://www.nintendo.com/es-es/Ayuda/Compras-y-suscripciones/-Se-puede-jugar-a-los-juegos-en-distintos-idiomas-1508494.html),
+[Nintendo, Mario Kart 8 Deluxe cambia de idioma desde los ajustes de consola](https://en-americas-support.nintendo.com/app/answers/detail/a_id/43255/~/mario-kart-8-deluxe-update-history),
+[guía comunitaria para cambiar App type por paquete en Dev Home](https://github.com/huseeiin/LCEDevMode) y
+[referencia del API Xbox Device Portal para ajustes de desarrollador](https://xboxoneresearch.github.io/wiki/development/dev-portal-api/ext/settings/).
+
+## Blits escalados depth-stencil: plano stencil aún omitido (11 oct 2026)
+
+El log histórico de Z-A registra 2305 blits escalados depth-stencil cuyo camino D3D12 copia solo depth;
+la Series declara que `PSSpecifiedStencilRefSupported` no está disponible. El motivo del límite es
+concreto: el camino actual dibuja depth a un DSV, pero una salida de shader `SV_StencilRef` no está
+soportada en este dispositivo. No asumir que `CopyImage` entre dos depth-stencil completos cubre el
+caso escalado.
+
+Microsoft define depth y stencil como subrecursos planos separados (plane 0 depth, plane 1 stencil) y
+el footprint de transferencia del plano stencil como un texel de 8 bits de la familia R8. Para
+`CopyTextureRegion`, el plano de un depth-stencil se copia completo: offsets de destino en cero y
+`pSrcBox == nullptr`; el API no hace escala. El borrador de D3D12 para UAVs depth-stencil es una
+capacidad preview que exige `CheckFeatureSupport`; además declara D24S8 no compatible con UAV. No
+usarlo como supuesto para esta UWP FL 11.0 sin confirmar soporte real en la consola.
+
+Candidato pendiente de validar: copiar ambos planos stencil completos a buffers GPU con footprint R8,
+remuestrear el plano con un compute shader sobre el buffer `ALLOW_UNORDERED_ACCESS`, y copiar el plano
+completo resultante al subrecurso stencil destino. Así se respeta la restricción del API, se mantiene
+el trabajo en GPU y se evita `SV_StencilRef` y el readback a CPU. `TransferBufferPool` ya puede dar
+buffers DEFAULT con UAV; falta comprobar el formato/footprint exacto, el redondeo de coordenadas y los
+estados/barriers con la capa de depuración, un harness de patrones y la Series. No se implementó ni
+se atribuye todavía ningún artefacto de Z-A a estos blits. La comparación local con el backend Vulkan
+acota la prioridad: Eden también hace blit depth-only cuando el dispositivo no ofrece stencil export
+de shader; el camino completo depth+stencil requiere esa capacidad. Por tanto, el candidato sería una
+mejora de compatibilidad para hardware sin export, no una corrección ya demostrada de una regresión
+específica de D3D12. No cambiar el fallback actual hasta que un patrón/harness pruebe el remuestreo.
+
+Fuentes: [Microsoft, especificación de profundidad/stencil planar](https://github.com/microsoft/DirectX-Specs/blob/master/d3d/PlanarDepthStencilDDISpec.md),
+[Microsoft, `CopyTextureRegion`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-copytextureregion),
+[Microsoft, propuesta preview de UAVs depth-stencil](https://github.com/microsoft/DirectX-Specs/blob/master/d3d/D3D12UAVofDepthBuffer.md).

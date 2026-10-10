@@ -221,6 +221,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'NASM preflight failed.' }
           git --version
 
+      - name: Test deployment helper log summaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python.exe tools/xbox/tests/test_eden_xbox_macos.py
+          if ($LASTEXITCODE -ne 0) { throw 'Deployment helper log summary tests failed.' }
+
       - name: Build SPIR-V to DXIL Store-CRT runtime
         shell: pwsh
         env:

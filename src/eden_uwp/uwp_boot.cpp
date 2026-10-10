@@ -26,6 +26,7 @@
 #include <mutex>
 #include <cstring>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -33,6 +34,8 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include "common/bug_tracker.h"
 #include "common/fs/path_util.h"
@@ -59,6 +62,8 @@
 #include "core/hle/kernel/physical_core.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/filesystem/filesystem.h"
+#include "core/hle/service/ns/language.h"
+#include "core/hle/service/set/settings_server.h"
 #include "core/loader/loader.h"
 #include "hid_core/hid_core.h"
 #include "video_core/frame_trace.h"
@@ -184,10 +189,62 @@ static void LogGameLanguageSupport(Core::System& system) {
     const u32 supported = nacp.GetSupportedLanguages();
     const bool supports_english_us =
         (supported & static_cast<u32>(FileSys::SupportedLanguage::AmericanEnglish)) != 0;
+    const auto requested_language_index = Settings::values.language_index.GetValue();
+    const auto language_code = Service::Set::GetLanguageCodeFromIndex(
+        static_cast<std::size_t>(requested_language_index));
+    const auto requested_language = Service::NS::ConvertToApplicationLanguage(language_code);
+    const auto priority = requested_language
+                              ? Service::NS::GetApplicationLanguagePriorityList(*requested_language)
+                              : nullptr;
+    std::optional<Service::NS::ApplicationLanguage> selected_language;
+    if (priority != nullptr) {
+        selected_language = Service::NS::SelectApplicationLanguage(*priority, supported);
+    }
+    const auto selected_language_index = selected_language
+                                             ? static_cast<s32>(*selected_language)
+                                             : -1;
+    const auto selected_language_name = [&] -> std::string_view {
+        if (!selected_language) return "none";
+        switch (*selected_language) {
+        case Service::NS::ApplicationLanguage::AmericanEnglish: return "English (US)";
+        case Service::NS::ApplicationLanguage::BritishEnglish: return "English (UK)";
+        case Service::NS::ApplicationLanguage::Japanese: return "Japanese";
+        case Service::NS::ApplicationLanguage::French: return "French";
+        case Service::NS::ApplicationLanguage::German: return "German";
+        case Service::NS::ApplicationLanguage::LatinAmericanSpanish:
+            return "Spanish (Latin America)";
+        case Service::NS::ApplicationLanguage::Spanish: return "Spanish";
+        case Service::NS::ApplicationLanguage::Italian: return "Italian";
+        case Service::NS::ApplicationLanguage::Dutch: return "Dutch";
+        case Service::NS::ApplicationLanguage::CanadianFrench: return "French (Canada)";
+        case Service::NS::ApplicationLanguage::Portuguese: return "Portuguese";
+        case Service::NS::ApplicationLanguage::Russian: return "Russian";
+        case Service::NS::ApplicationLanguage::Korean: return "Korean";
+        case Service::NS::ApplicationLanguage::TraditionalChinese:
+            return "Chinese (Traditional)";
+        case Service::NS::ApplicationLanguage::SimplifiedChinese:
+            return "Chinese (Simplified)";
+        case Service::NS::ApplicationLanguage::BrazilianPortuguese:
+            return "Portuguese (Brazil)";
+        case Service::NS::ApplicationLanguage::Polish: return "Polish";
+        case Service::NS::ApplicationLanguage::Thai: return "Thai";
+        case Service::NS::ApplicationLanguage::Count: return "none";
+        }
+        return "unknown";
+    }();
+    const auto program_id = system.GetApplicationProcessProgramID();
     LOG_INFO(Frontend,
-             "Headless boot: game languages {:08X}, en-US supported {}, system language {}",
-             supported, supports_english_us,
-             Settings::CanonicalizeEnum(Settings::values.language_index.GetValue()));
+             "Headless boot: title {:016X}, game languages {:08X}, en-US supported {}, "
+             "system language {} (index {}, code {:016X}), NACP-priority candidate {} (index {})",
+             program_id, supported, supports_english_us,
+             Settings::CanonicalizeEnum(requested_language_index), requested_language_index,
+             static_cast<u64>(language_code), selected_language_name, selected_language_index);
+    WriteDiag(fmt::format(
+        "game language metadata: title {:016X}, NACP {:08X}, en-US supported {}, "
+        "system language {} (index {}, code {:016X}), NACP-priority candidate {} (index {})",
+        program_id, supported, supports_english_us,
+        Settings::CanonicalizeEnum(requested_language_index), requested_language_index,
+        static_cast<u64>(language_code), selected_language_name, selected_language_index));
 }
 
 /// Optional boot.cfg next to boot.nro (written by package-appx.ps1 -RunSeconds).
@@ -287,6 +344,8 @@ int RunHeadlessBoot(const std::string& nro_path, const BootSurface& surface,
         Settings::values.log_filter = config.log_filter;
     }
     Common::Log::Initialize();
+    WriteDiag(std::string{"build identity: "} + Common::g_build_fullname + " (" +
+              Common::g_scm_desc + ")");
     if (config.bug_tracker) {
         // Idempotent: the library launches several games in one process.
         Common::BugTracker::Install(Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir),
@@ -792,6 +851,7 @@ int RunHeadlessBoot(const std::string& nro_path, const BootSurface& surface,
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Graphics.Display.h>
+#include <winrt/Windows.Globalization.h>
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.System.Profile.h>
@@ -1619,7 +1679,26 @@ struct BootView : implements<BootView, IFrameworkViewSource, IFrameworkView> {
     IFrameworkView CreateView() {
         return *this;
     }
-    void Initialize(CoreApplicationView const&) {}
+    void Initialize(CoreApplicationView const&) {
+        // Keep Eden's resource selection independent of the Xbox user's language. This override
+        // is scoped to Eden and is applied before the library or other UI resources are created.
+        try {
+            winrt::Windows::Globalization::ApplicationLanguages::PrimaryLanguageOverride(
+                L"en-US");
+            const auto applied =
+                winrt::Windows::Globalization::ApplicationLanguages::PrimaryLanguageOverride();
+            m_ui_language_report = "app language override: requested en-US, readback " +
+                                   winrt::to_string(applied);
+        } catch (const winrt::hresult_error& error) {
+            m_ui_language_report = "app language override: failed (" +
+                                   winrt::to_string(error.message()) + ")";
+        } catch (const std::exception& error) {
+            m_ui_language_report = "app language override: failed (" + std::string{error.what()} +
+                                   ")";
+        } catch (...) {
+            m_ui_language_report = "app language override: failed (unknown error)";
+        }
+    }
     void SetWindow(CoreWindow const& window) {
         m_window = window;
     }
@@ -1628,6 +1707,7 @@ struct BootView : implements<BootView, IFrameworkViewSource, IFrameworkView> {
 
     void Run() {
         WriteDiag("BootView::Run entered"); // also resolves + caches the diag path
+        WriteDiag(m_ui_language_report);
         WriteDiag(MemoryReport());
         InstallCrashHandlers();
 
@@ -2077,6 +2157,7 @@ private:
     }
 
     CoreWindow m_window{nullptr};
+    std::string m_ui_language_report{"app language override: not set"};
 };
 
 } // namespace
