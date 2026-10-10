@@ -16,6 +16,7 @@
 #include "nir_builder.h"
 #include "nir_to_dxil.h"
 #include "spirv/nir_spirv.h"
+#include "spirv/spirv_info.h"
 #include "util/blob.h"
 
 #include <stdio.h>
@@ -120,6 +121,13 @@ translate_pipeline(const struct eden_spirv_to_dxil_stage *stages, unsigned count
    nir_shader *nir[EDEN_SPIRV_TO_DXIL_MAX_STAGES] = {0};
    struct spirv_log_context spirv_log = {.logger = logger};
    struct spirv_to_nir_options spirv_options = *dxil_spirv_nir_get_spirv_options();
+   /* Eden emits ShaderViewportIndexLayerEXT when D3D12 reports that vertex stages may write
+    * SV_RenderTargetArrayIndex without a geometry shader. Mesa's standalone DXIL translator
+    * leaves this parser capability disabled, so otherwise valid vertex SPIR-V is rejected before
+    * NIR can map VARYING_SLOT_LAYER to the DXIL RenderTargetArrayIndex semantic. */
+   struct spirv_capabilities spirv_capabilities = *spirv_options.capabilities;
+   spirv_capabilities.ShaderViewportIndexLayerEXT = true;
+   spirv_options.capabilities = &spirv_capabilities;
    spirv_options.debug.func = log_spirv_parse_message;
    spirv_options.debug.private_data = &spirv_log;
    // Parse failures use the normal pipeline error path, even in Mesa debug builds.

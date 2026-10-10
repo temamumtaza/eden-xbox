@@ -2750,3 +2750,34 @@ esa línea de diagnóstico y se conserva el `MemoryReport()`. Los builds anterio
 paquete; falta validar esta corrección en Actions y obtener el paquete con la telemetría Mesa.
 Fuentes: [checksum oficial Mesa 26.2.3](https://docs.mesa3d.org/relnotes/26.2.3.html) y
 [mirror del archivo de Mesa 26.2.3](https://sources.voidlinux.org/mesa-26.2.3/mesa-26.2.3.tar.xz).
+
+## Z-A: Vertex `Layer` rechazado por Mesa en Xbox (`0.3.0.35`, 11 oct 2026)
+
+El usuario reportó que Z-A quedaba en la tarjeta de ayuda/carga con el spinner visible y ~30 FPS.
+Los logs descargados durante esa sesión muestran que Eden seguía ejecutándose al menos 333 s; la
+memoria se mantuvo cerca de 2304 MiB de un límite de Game de 5120 MiB. No hay evidencia de cierre
+ni de falta de memoria. Se registraron 17 fallos de traducción SPIR-V→NIR, todos con
+`invalid stage for SpvBuiltInLayer`, para los pares VS `a56cbff40df77b6e` + PS `fa4b2ee1b67cfe3e`
+(11) y VS `bb1937e482fff7f8` + PS `ffb21bdb2ee87c04` (6). Hubo además tres lecturas `Unmapped
+Device ReadBlock`; su relación con el bloqueo de carga no está demostrada.
+
+El módulo Vertex ya capturado anteriormente declara `SPV_EXT_shader_viewport_index_layer`,
+`ShaderViewportIndexLayerEXT` (5254) y una salida `BuiltIn Layer`. El perfil D3D12 de Eden habilita
+esa salida no-Geometry únicamente tras consultar
+`VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation`; la Series informa
+`yes`. Khronos permite esta salida con esa capability y Mesa mapea `VARYING_SLOT_LAYER` al semantic
+DXIL `SV_RenderTargetArrayIndex`, pero el conjunto de capabilities del parser usado por el wrapper
+no habilita la capability SPIR-V correspondiente. El parser, por tanto, rechaza el shader antes de
+que el backend pueda emitir DXIL.
+
+Se añadió a `tools/xbox/mesa/eden_pipeline.c` un override local de
+`ShaderViewportIndexLayerEXT` en la copia de `spirv_capabilities` pasada a `spirv_to_nir`. No se
+cambia el conjunto global de Mesa ni la generación SPIR-V de Eden. La compilación Mesa/UWP, la
+traducción de esos shaders, la creación de PSO y la prueba visual en la Series están pendientes; el
+arreglo del spinner no se considera demostrado hasta repetir la escena. Mantener separado el error
+de lectura no mapeada hasta identificar el acceso invitado y su uso.
+
+Fuentes: [SPIR-V EXT_shader_viewport_index_layer](https://github.khronos.org/SPIRV-Registry/extensions/EXT/SPV_EXT_shader_viewport_index_layer.html),
+[Mesa `vtn_variables.c`](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/%2B/5ec01259be367766c2bd1aad4fcef49e79c4c574/src/compiler/spirv/vtn_variables.c),
+[Mesa DXIL signature mapping](https://fossies.org/dox/mesa-26.1.8/dxil__signature_8c_source.html) y
+[Microsoft HLSL semantics](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics).

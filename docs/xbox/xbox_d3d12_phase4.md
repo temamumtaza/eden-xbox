@@ -2497,3 +2497,16 @@ y [`spirv_to_nir.c`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.2.3
 `build-spirv-to-dxil.ps1` copia `tools/xbox/mesa/eden_pipeline.c` al árbol Mesa; la DLL debe
 recompilarse antes de que el próximo log incluya el diagnóstico. La sesión Z-A y las hipótesis
 separadas están en [xbox_internal.md](xbox_internal.md#prueba-z-a-y-selección-de-idioma-del-sistema).
+
+La captura de Z-A con `0.3.0.35` acotó el fallo a `invalid stage for SpvBuiltInLayer` al analizar
+el Vertex (`a56cbff40df77b6e`): 17 traducciones fallaron y sus draws se omitieron. El Vertex
+declara `SPV_EXT_shader_viewport_index_layer` y `ShaderViewportIndexLayerEXT` (capability 5254),
+que permite emitir `Layer` desde Vertex. Eden activa esa salida solo cuando la consulta D3D12
+`VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation` lo confirma; la
+Series devolvió `yes`. Mesa representa esa entrada mediante `spirv_capabilities`, pero el conjunto
+base del translator no activa la capability, y por eso su parser rechaza el módulo antes de NIR.
+El wrapper ahora activa únicamente `ShaderViewportIndexLayerEXT` en la copia local de las
+capabilities para la traducción enlazada. DXIL ya asigna `VARYING_SLOT_LAYER` a
+`SV_RenderTargetArrayIndex`. La compilación de Mesa, la traducción del shader, el PSO y la
+reproducción visual en Xbox siguen pendientes; esta corrección aún no está certificada como arreglo
+del bloqueo de carga.
