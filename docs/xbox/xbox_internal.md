@@ -2674,8 +2674,21 @@ precisa del fallo.
 El cambio de código fija el idioma de sistema **English (US)** y la región **USA**. NS sigue la lista de
 prioridad del título cuando no declara en-US; el log registra su máscara de idiomas sin cambiar la
 preferencia global. La máscara `000070FD` de Z-A incluye el bit American English, así que el juego
-declara en-US. Esto no cambia el idioma de la interfaz de Eden o de Xbox. Los cambios de idioma y
-telemetría de shader aún no se han compilado ni instalado; la consola conserva el paquete 0.3.0.28.
+declara en-US. Esto no cambia el idioma de la interfaz de Eden o de Xbox.
+
+El 11 oct se instaló el paquete diagnóstico `0.3.0.29`, construido como reempaquetado del binario
+`790cda073e56fa50d39ba554814ab8d4eed9e634` (artefacto UWP/Mesa del workflow #24) y con los scripts
+de paquete de `691ae73e6f634f53919eba2bc98bdc9a88c35533`. Su `boot.cfg` selecciona el VS
+`a56cbff40df77b6e`, cuyo par VS/PS falló 11 veces en el log rotado. La verificación local de
+checksum/manifest y la instalación por Device Portal confirmaron `0.3.0.29`; después se lanzó Eden.
+Este reempaquetado conserva el binario previo: sirve para capturar IR/SPIR-V con la opción que ya
+existía, pero aún no contiene el cambio English (US)/USA ni el callback nuevo de errores Mesa.
+Queda pendiente abrir Z-A con este paquete y recuperar el volcado antes de construir otra versión.
+
+La primera corrida de packaging-only (#38076888838) falló antes de crear el APPX: PowerShell recibió
+un array de cadenas como argumentos posicionales y trató `-SpirvToDxil` como valor de `RunSeconds`.
+El workflow ahora usa una tabla de parámetros con nombre. La segunda corrida (#38077009043)
+completó el empaquetado, firma, validación y publicación en 31 s, sin ejecutar el job de build UWP.
 
 El siguiente build reutiliza las cachés con una huella de configuración v2. Para migrar las cachés
 anteriores sin arriesgar un árbol Mesa con opciones distintas, se conserva CPM y `build-uwp`, pero
