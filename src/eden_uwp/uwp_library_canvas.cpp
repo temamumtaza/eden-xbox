@@ -75,7 +75,7 @@ public:
         ComPtr<IDWriteTextFormat> version_format;
         winrt::check_hresult(write->CreateTextFormat(L"Segoe UI", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-            12, L"es-ES", &version_format));
+            12, L"en-US", &version_format));
         winrt::check_hresult(write->CreateTextLayout(version_text.data(),
             static_cast<UINT32>(version_text.size()), version_format.Get(), 180, 18,
             &version_layout));
@@ -108,33 +108,33 @@ public:
         if (logo) target->DrawBitmap(logo.Get(), D2D1::RectF(50, 38, 104, 92), 1,
                                      D2D1_INTERPOLATION_MODE_LINEAR);
         Text(L"eden", 120, 40, 32, 0xf4f7fa, 140, 48, true);
-        Text(L"BIBLIOTECA", 266, 54, 16, 0x9ba9ba, 200);
+        Text(L"LIBRARY", 266, 54, 16, 0x9ba9ba, 200);
         Round(670, 43, 225, 44, 14, 0x202b39);
-        ControlPrompt(Navigation::AddFolder, L"Configuracion", 680, 49, 174);
-        Text(std::to_wstring(scan.entries.size()) + L" juegos", 900, 52, 18, 0x9ba9ba, 170);
+        ControlPrompt(Navigation::AddFolder, L"Settings", 680, 49, 174);
+        Text(std::to_wstring(scan.entries.size()) + L" games", 900, 52, 18, 0x9ba9ba, 170);
         Round(1080, 43, 146, 44, 14, 0x202b39);
-        ControlPrompt(Navigation::Settings, L"Mando", 1090, 49, 100);
+        ControlPrompt(Navigation::Settings, L"Controller", 1090, 49, 100);
         Round(50, 112, 1176, 1, 0, 0x233142);
         if (loading) {
-            Text(L"Preparando tu biblioteca", 64, 192, 40, 0xf4f7fa, 1000, 64, true);
-            Text(L"Buscando juegos en tu carpeta...", 64, 266, 24, 0x9ba9ba, 1000);
+            Text(L"Preparing your library", 64, 192, 40, 0xf4f7fa, 1000, 64, true);
+            Text(L"Looking for games in your folder...", 64, 266, 24, 0x9ba9ba, 1000);
         } else if (scan.entries.empty()) {
-            Text(L"Tu proxima aventura empieza aqui", 64, 192, 40, 0xf4f7fa, 1100, 70, true);
-            Text(L"Abre Configuracion para importar tus claves, firmware y agregar una carpeta externa.", 64, 278, 24, 0x9ba9ba, 1120);
+            Text(L"Your next adventure starts here", 64, 192, 40, 0xf4f7fa, 1100, 70, true);
+            Text(L"Open Settings to import your keys and firmware, then add a game folder.", 64, 278, 24, 0x9ba9ba, 1120);
         } else {
             const auto& game = scan.entries[selected];
             Cover(game, 64, 148, 220);
-            Text(configuration.status.keys_ready ? L"LISTO PARA JUGAR" : L"IMPORTA TUS CLAVES EN CONFIGURACION",
+            Text(configuration.status.keys_ready ? L"READY TO PLAY" : L"IMPORT YOUR KEYS IN SETTINGS",
                  320, 149, 16, 0x77e3bd, 700);
             Text(game.name, 320, 184, 42, 0xf4f7fa, 866, 110, true, true);
-            Text((game.developer.empty() ? L"Tu biblioteca personal" : game.developer) +
+            Text((game.developer.empty() ? L"Your library" : game.developer) +
                  (game.source_name.empty() ? L"" : L" · " + game.source_name),
                  320, 292, 23, 0x9ba9ba, 850);
             Round(320, 334, 184, 46, 14, 0x77e3bd);
             Round(331, 341, 34, 32, 8, 0x152b26);
-            ControlPrompt(Navigation::Play, L"Jugar", 332, 340, 100, 0x0b1018);
+            ControlPrompt(Navigation::Play, L"Play", 332, 340, 100, 0x0b1018);
             Text(game.relative_path.extension().wstring().substr(1), 532, 344, 18, 0x9ba9ba, 600);
-            Text(L"Tus juegos", 64, 402, 24, 0xe5edf5, 950, 36, true);
+            Text(L"Your games", 64, 402, 24, 0xe5edf5, 950, 36, true);
             Text(std::to_wstring(selected + 1) + L" / " + std::to_wstring(scan.entries.size()),
                  1100, 405, 19, 0x9ba9ba, 120);
             const size_t first = selected / 5 * 5;
@@ -146,11 +146,11 @@ public:
                 Text(scan.entries[i].name, x + 3, 586, 19, 0xf4f7fa, 197, 40, true);
             }
         }
-        ControlPrompt(Navigation::Play, L"Jugar", 64, 654, 150);
-        ControlPrompt(Navigation::Explore, L"Explorar", 294, 654, 150);
-        ControlPrompt(Navigation::Settings, L"Mando", 524, 654, 150);
-        ControlPrompt(Navigation::Refresh, L"Actualizar", 754, 654, 150);
-        ControlPrompt(Navigation::Back, L"Salir", 1000, 654, 150);
+        ControlPrompt(Navigation::Play, L"Play", 64, 654, 150);
+        ControlPrompt(Navigation::Explore, L"Browse", 294, 654, 150);
+        ControlPrompt(Navigation::Settings, L"Controller", 524, 654, 150);
+        ControlPrompt(Navigation::Refresh, L"Refresh", 754, 654, 150);
+        ControlPrompt(Navigation::Back, L"Exit", 1000, 654, 150);
         brush->SetColor(D2D1::ColorF(0x738194));
         target->DrawTextLayout(D2D1::Point2F(1046, 690), version_layout.Get(), brush.Get(),
                                D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -159,8 +159,8 @@ public:
             brush->SetColor(D2D1::ColorF(0, 0, 0, 0.72f));
             target->FillRectangle(D2D1::RectF(0, 0, 1280, 720), brush.Get());
             Round(620, 133, 586, 487, 24, 0x202b39);
-            Text(L"Tu mando", 658, 168, 34, 0xf4f7fa, 490, 55, true);
-            Text(L"Jugador 1 · Ajustes para todos tus juegos", 658, 227, 21, 0x9ba9ba, 490);
+            Text(L"Your controller", 658, 168, 34, 0xf4f7fa, 490, 55, true);
+            Text(L"Player 1 · Settings for all games", 658, 227, 21, 0x9ba9ba, 490);
             const unsigned offset = panel.xbox ? 0 : 1;
             const auto active = SelectController(panel.devices, options.controller_id);
             const bool nintendo = active && panel.devices[*active].nintendo;
@@ -170,25 +170,25 @@ public:
                 const bool device = offset && row == 0;
                 const bool type = row == offset;
                 const bool face = row == offset + 1;
-                Text(device ? L"Dispositivo                         v" :
-                     type ? L"La consola lo ve como          < >" :
-                     face ? L"Botones A / B / X / Y" : L"Zona muerta de sticks",
+                Text(device ? L"Device                               v" :
+                     type ? L"Console controller type       < >" :
+                     face ? L"A / B / X / Y button order" : L"Stick deadzone",
                      669, y + 2, 19, 0xf4f7fa, 460, 28, true);
-                Text(device ? (options.controller_id.empty() ? L"Automatico · " : L"") +
+                Text(device ? (options.controller_id.empty() ? L"Automatic · " : L"") +
                          ControllerLabel(panel.devices, options.controller_id) :
                      type ? std::wstring{ConsoleControllerStyleLabel(options.style)} :
-                     face ? (nintendo ? L"Mando Nintendo: letra y posicion coinciden" :
-                            options.swap_face_buttons ? L"Por posicion" : L"Por letra") :
+                     face ? (nintendo ? L"Nintendo layout: labels match positions" :
+                            options.swap_face_buttons ? L"By position" : L"By label") :
                          std::to_wstring(static_cast<int>(options.deadzone * 100)) + L"%",
                      669, y + 28, 18, 0x77e3bd, 460, 26);
             }
             if (!panel.xbox) {
                 Round(648, 510, 530, 34, 10, setting_row == 4 ? 0x304c4b : 0x151e2b);
-                Text(L"Configurar teclado   >", 669, 512, 19, 0x77e3bd, 460, 30, true);
+                Text(L"Configure keyboard   >", 669, 512, 19, 0x77e3bd, 460, 30, true);
             }
-            ControlPrompt(Navigation::Explore, L"Elegir", 658, 551, 90);
-            ControlPrompt(Navigation::Play, L"Cambiar", 838, 551, 100);
-            ControlPrompt(Navigation::Back, L"Volver", 1018, 551, 100);
+            ControlPrompt(Navigation::Explore, L"Select", 658, 551, 90);
+            ControlPrompt(Navigation::Play, L"Change", 838, 551, 100);
+            ControlPrompt(Navigation::Back, L"Back", 1018, 551, 100);
             if (!panel.notice.empty()) Text(panel.notice, 658, 594, 16, 0x77e3bd, 515, 25);
         }
         if (settings && panel.expanded) {
@@ -202,10 +202,10 @@ public:
                 Round(652, y, 522, 40, 8, i == panel.choice ? 0x304c4b : 0x151e2b);
                 const bool session = i >= 2 && panel.devices[i - 2].id.starts_with(L"session:");
                 const bool supported = i < 2 || (bool(panel.devices[i - 2]) && !session);
-                const std::wstring label = i == 0 ? L"Automatico (primer mando disponible)" :
-                    i == 1 ? L"Teclado" : panel.devices[i - 2].name +
-                    (supported ? (panel.devices[i - 2].wireless ? L" · Inalambrico" : L" · USB") :
-                                 session ? L" · Solo modo automatico" : L" · Sin mapeo compatible");
+                const std::wstring label = i == 0 ? L"Automatic (first available controller)" :
+                    i == 1 ? L"Keyboard" : panel.devices[i - 2].name +
+                    (supported ? (panel.devices[i - 2].wireless ? L" · Wireless" : L" · USB") :
+                                 session ? L" · Automatic mode only" : L" · No compatible mapping");
                 Text(label, 665, y + 6, 18, supported ? 0xf4f7fa : 0x9ba9ba, 495, 30);
             }
         }
@@ -222,14 +222,14 @@ private:
         brush->SetColor(D2D1::ColorF(0, 0, 0, 0.86f));
         target->FillRectangle(D2D1::RectF(0, 0, 1280, 720), brush.Get());
         Round(80, 88, 1120, 584, 22, 0x111923);
-        Text(L"Configuracion de teclado", 120, 118, 28, 0xf4f7fa, 900, 44, true);
-        Text(L"Jugador 1  /  Mando Pro", 120, 166, 17, 0x91a3b8, 650, 30);
+        Text(L"Keyboard settings", 120, 118, 28, 0xf4f7fa, 900, 44, true);
+        Text(L"Player 1  /  Pro Controller", 120, 166, 17, 0x91a3b8, 650, 30);
         Round(1120, 112, 48, 40, 10, 0x202c3c);
         brush->SetColor(D2D1::ColorF(0xc5cfdb));
         target->DrawLine(D2D1::Point2F(1137, 125), D2D1::Point2F(1151, 139), brush.Get(), 2);
         target->DrawLine(D2D1::Point2F(1151, 125), D2D1::Point2F(1137, 139), brush.Get(), 2);
         Round(120, 210, 480, 342, 16, 0x182331);
-        Text(L"VISTA DEL MANDO", 143, 225, 13, 0x91a3b8, 220, 24, true);
+        Text(L"CONTROLLER VIEW", 143, 225, 13, 0x91a3b8, 220, 24, true);
         // Reuse Eden Qt's original Pro Controller contours and button coordinates.
         // Create paths once; fills/strokes/highlights share cached GPU resources.
         if (!controller_paths[0]) {
@@ -299,12 +299,12 @@ private:
         Text(L"L", 220, 252, 14, action == 6 ? 0x102921 : 0xc5cfdb, 60, 22, true, false, true);
         Text(L"R", 450, 252, 14, action == 7 ? 0x102921 : 0xc5cfdb, 40, 22, true, false, true);
         Round(120, 564, 480, 67, 12, 0x20342f);
-        Text(L"ASIGNACION SELECCIONADA", 140, 574, 11, 0x91b7a7, 300, 19, true);
+        Text(L"SELECTED BINDING", 140, 574, 11, 0x91b7a7, 300, 19, true);
         Text(KeyboardActionNames[action], 140, 594, 20, 0xf0f7f4, 285, 30, true);
         Round(436, 579, 142, 38, 8, 0x111f1c);
-        Text(editor.capturing ? L"Pulsa una tecla" : KeyboardKeyName(editor.bindings[action]),
+        Text(editor.capturing ? L"Press a key" : KeyboardKeyName(editor.bindings[action]),
              436, 579, 16, 0x77e3bd, 142, 38, true, false, true);
-        constexpr std::array<const wchar_t*, 3> pages{L"Botones", L"Cruceta / sistema", L"Sticks"};
+        constexpr std::array<const wchar_t*, 3> pages{L"Buttons", L"D-pad / system", L"Sticks"};
         for (unsigned page = 0; page < pages.size(); ++page) {
             const float x = 635 + page * 174.0f;
             Round(x, 203, 166, 36, 9, page == editor.page ? 0x304c46 : 0x1b2736);
@@ -319,14 +319,14 @@ private:
             Text(i == action && editor.capturing ? L"..." : KeyboardKeyName(editor.bindings[i]),
                  tile.x + 153, tile.y + 9, 14, i == action ? 0x77e3bd : 0xabb9c9, 86, 27, true, false, true);
         }
-        Round(635, 603, 155, 36, 8, 0x1b2736); Text(L"Borrar asignacion", 635, 603, 15, 0xc5cfdb, 155, 36, false, false, true);
-        Round(806, 603, 170, 36, 8, 0x1b2736); Text(L"Restaurar", 806, 603, 15, 0xc5cfdb, 170, 36, false, false, true);
+        Round(635, 603, 155, 36, 8, 0x1b2736); Text(L"Clear binding", 635, 603, 15, 0xc5cfdb, 155, 36, false, false, true);
+        Round(806, 603, 170, 36, 8, 0x1b2736); Text(L"Reset", 806, 603, 15, 0xc5cfdb, 170, 36, false, false, true);
         if (!editor.notice.empty()) Text(editor.notice, 990, 609, 13, 0x91b7a7, 172, 30);
-        Text(editor.capturing ? L"Esperando tecla...  Esc cancela  /  4 segundos" :
-             L"Click o Enter: asignar    Tab: cambiar grupo    Supr: borrar    Esc: volver",
+        Text(editor.capturing ? L"Waiting for input...  Esc cancels  /  4 seconds" :
+             L"Click or Enter: bind    Tab: change page    Del: clear    Esc: back",
              120, 644, 13, 0x7f91a6, prompt_family == PromptFamily::Keyboard ? 1030.0f : 860.0f, 22);
         if (prompt_family != PromptFamily::Keyboard)
-            ControlPrompt(Navigation::Back, L"Volver", 1010, 637, 100);
+            ControlPrompt(Navigation::Back, L"Back", 1010, 637, 100);
     }
     ComPtr<ID2D1Bitmap1> LoadAssetBitmap(const std::filesystem::path& relative) {
         ComPtr<ID2D1Bitmap1> bitmap;
@@ -393,14 +393,14 @@ private:
         brush->SetColor(D2D1::ColorF(0, 0, 0, 0.88f));
         target->FillRectangle(D2D1::RectF(0, 0, 1280, 720), brush.Get());
         Round(60, 58, 1160, 604, 24, 0x111923);
-        const auto purpose = panel.path_purpose == FolderPathPurpose::Games ? L"juegos" :
-                             panel.path_purpose == FolderPathPurpose::Keys ? L"claves" : L"firmware";
-        Text(L"Agregar carpeta externa", 108, 78, 30, 0xf4f7fa, 900, 42, true);
-        Text(std::wstring{L"Escribe una ruta absoluta para "} + purpose + L".",
+        const auto purpose = panel.path_purpose == FolderPathPurpose::Games ? L"games" :
+                             panel.path_purpose == FolderPathPurpose::Keys ? L"keys" : L"firmware";
+        Text(L"Add a game folder", 108, 78, 30, 0xf4f7fa, 900, 42, true);
+        Text(std::wstring{L"Enter an absolute path for "} + purpose + L".",
              110, 130, 19, 0x9ba9ba, 1050, 30);
         Round(108, 172, 1064, 54, 10, panel.path_resolving ? 0x1c2b38 : 0x202b39);
         std::wstring visible;
-        if (panel.path_text.empty()) visible = L"D:\\Juegos  o  \\\\servidor\\carpeta";
+        if (panel.path_text.empty()) visible = L"D:\\Games  or  \\\\server\\folder";
         else {
             const size_t cursor = std::min(panel.path_cursor, panel.path_text.size());
             const size_t first = cursor > 56 ? cursor - 56 : 0;
@@ -408,8 +408,8 @@ private:
             visible.insert(std::min(cursor - first, visible.size()), L"|");
         }
         Text(visible, 128, 182, 22, panel.path_text.empty() ? 0x738194 : 0xf4f7fa, 1020, 36);
-        Text(panel.path_resolving ? L"Comprobando acceso con Windows..." :
-             L"El acceso depende de los permisos de Windows y del sandbox de la app. No se guardan credenciales.",
+        Text(panel.path_resolving ? L"Checking access with Windows..." :
+             L"Access depends on Windows permissions and the app sandbox. Credentials are not saved.",
              110, 236, 16, 0x9ba9ba, 1060, 34, false, true);
         for (size_t row = 0; row < FolderPathKeyboardRows; ++row) {
             for (size_t column = 0; column < FolderPathKeyboardColumns; ++column) {
@@ -428,26 +428,26 @@ private:
         }
         if (!panel.path_error.empty())
             Text(panel.path_error, 110, 526, 16, 0xff9b91, 1050, 54, false, true);
-        ControlPrompt(Navigation::Play, L"Agregar ruta", 110, 612, 190,
+        ControlPrompt(Navigation::Play, L"Add path", 110, 612, 190,
                       panel.path_resolving ? 0x738194 : 0x9ba9ba);
-        Text(L"Teclado: escribir · Retroceso · Enter", 472, 616, 15, 0x9ba9ba, 340, 28, false, false, true);
-        ControlPrompt(Navigation::Back, L"Cancelar", 1010, 612, 120);
+        Text(L"Keyboard: type · Backspace · Enter", 472, 616, 15, 0x9ba9ba, 340, 28, false, false, true);
+        ControlPrompt(Navigation::Back, L"Cancel", 1010, 612, 120);
     }
     void DrawFolderBrowser(const ConfigurationPanel& panel) {
         brush->SetColor(D2D1::ColorF(0, 0, 0, 0.88f));
         target->FillRectangle(D2D1::RectF(0, 0, 1280, 720), brush.Get());
         Round(60, 58, 1160, 604, 24, 0x111923);
-        const auto purpose = panel.path_purpose == FolderPathPurpose::Games ? L"juegos" :
-                             panel.path_purpose == FolderPathPurpose::Keys ? L"claves" : L"firmware";
-        Text(std::wstring{L"Buscar carpeta para "} + purpose, 108, 76, 30, 0xf4f7fa, 1000, 42, true);
+        const auto purpose = panel.path_purpose == FolderPathPurpose::Games ? L"games" :
+                             panel.path_purpose == FolderPathPurpose::Keys ? L"keys" : L"firmware";
+        Text(std::wstring{L"Choose a folder for "} + purpose, 108, 76, 30, 0xf4f7fa, 1000, 42, true);
         const std::wstring location = panel.browser_location.empty() ?
-            L"Ubicaciones disponibles para Eden" : panel.browser_location;
+            L"Locations available to Eden" : panel.browser_location;
         Text(location, 110, 125, 17, 0x9ba9ba, 1060, 34, false, true);
-        Text(L"Solo se muestran carpetas que Windows expone a Eden; las rutas privadas siguen protegidas.",
+        Text(L"Only folders exposed to Eden by Windows are shown; private paths remain protected.",
              110, 151, 14, 0x738194, 1060, 24, false, true);
 
         if (panel.browser_loading) {
-            Text(panel.browser_at_roots ? L"Cargando ubicaciones..." : L"Buscando subcarpetas...",
+            Text(panel.browser_at_roots ? L"Loading locations..." : L"Searching subfolders...",
                  110, 310, 23, 0x9ba9ba, 1060, 40, false, true);
         } else {
             size_t row = 0;
@@ -462,24 +462,24 @@ private:
                 if (!detail.empty()) Text(detail, 132, y + 20, 12, 0x9ba9ba, 1010, 18);
             };
             if (!panel.browser_at_roots) {
-                draw_row(row++, std::wstring{L"Usar esta carpeta para "} + purpose);
-                draw_row(row++, L"Subir un nivel / volver a ubicaciones");
+                draw_row(row++, std::wstring{L"Use this folder for "} + purpose);
+                draw_row(row++, L"Go up one level / back to locations");
             }
             for (const auto& entry : panel.browser_entries) draw_row(row++, entry.name);
-            if (row == 0) Text(L"No hay ubicaciones disponibles para explorar.", 110, 315, 20, 0x9ba9ba, 1060, 40);
+            if (row == 0) Text(L"No locations are available to browse.", 110, 315, 20, 0x9ba9ba, 1060, 40);
             else if (!panel.browser_at_roots && panel.browser_entries.empty())
-                Text(L"Esta carpeta no contiene subcarpetas.", 130, 274, 16, 0x9ba9ba, 1020, 30);
+                Text(L"This folder has no subfolders.", 130, 274, 16, 0x9ba9ba, 1020, 30);
         }
         if (!panel.browser_error.empty())
             Text(panel.browser_error, 110, 568, 14, 0xff9b91, 1060, 30, false, true);
         else if (!panel.browser_loading)
-            Text(L"Pagina " + std::to_wstring(panel.browser_page / FolderBrowserPageSize + 1),
+            Text(L"Page " + std::to_wstring(panel.browser_page / FolderBrowserPageSize + 1),
                  110, 568, 14, 0x738194, 240, 26);
-        ControlPrompt(Navigation::Play, L"Abrir / usar carpeta", 110, 612, 250,
+        ControlPrompt(Navigation::Play, L"Open / use folder", 110, 612, 250,
                       panel.browser_loading ? 0x738194 : 0x9ba9ba);
-        Text(L"← Anterior", 385, 616, 15, 0x9ba9ba, 120, 28, false, false, true);
-        Text(L"Siguiente →", 635, 616, 15, 0x9ba9ba, 140, 28, false, false, true);
-        ControlPrompt(Navigation::Back, L"Subir / cancelar", 1000, 612, 160);
+        Text(L"← Previous", 385, 616, 15, 0x9ba9ba, 120, 28, false, false, true);
+        Text(L"Next →", 635, 616, 15, 0x9ba9ba, 140, 28, false, false, true);
+        ControlPrompt(Navigation::Back, L"Up / cancel", 1000, 612, 160);
     }
     void DrawConfiguration(const ConfigurationPanel& panel) {
         Round(0, 0, 1280, 720, 0, 0x080d15);
@@ -493,13 +493,13 @@ private:
             Round(180, 156, 48, 48, 12, 0x304b49);
             DrawConfigurationIcon(ConfigurationIcon::Settings, 188, 164, 0x77e3bd);
         }
-        Text(panel.files ? L"Gestor de archivos" : L"Configuracion",
+        Text(panel.files ? L"File Manager" : L"Settings",
              panel.files ? 194.0f : 246.0f, panel.files ? 108.0f : 151.0f, 32, 0xf4f7fa, 850, 50, true);
         if (panel.files) {
-            Text(std::wstring{panel.status.keys_ready ? L"Claves listas" : L"Claves pendientes"} +
-                 L"  ·  Firmware: " + std::to_wstring(panel.status.firmware_files) + L" archivos", 130, 168, 18, 0x77e3bd, 950);
-            Text(L"Juegos desde una carpeta externa. Claves y firmware se importan al almacenamiento interno.", 130, 201, 16, 0x9ba9ba, 950);
-        } else Text(L"Todo listo para jugar, a tu manera", 246, 198, 17, 0x9ba9ba, 790);
+            Text(std::wstring{panel.status.keys_ready ? L"Keys ready" : L"Keys missing"} +
+                 L"  ·  Firmware: " + std::to_wstring(panel.status.firmware_files) + L" files", 130, 168, 18, 0x77e3bd, 950);
+            Text(L"Games stay in an external folder. Keys and firmware are imported to internal storage.", 130, 201, 16, 0x9ba9ba, 950);
+        } else Text(L"Everything you need to play", 246, 198, 17, 0x9ba9ba, 790);
         const auto count = ConfigurationRowCount(panel);
         const auto first = ConfigurationFirstRow(panel);
         for (size_t i = first; i < std::min(first + 5, count); ++i) {
@@ -513,19 +513,19 @@ private:
             const float icon_y = y + (layout.row_height - 32) / 2;
             DrawConfigurationIcon(icon, layout.x + 20, icon_y, active ? 0x77e3bd : 0x9ba9ba);
             std::wstring title;
-            if (!panel.files) title = i == 0 ? L"Gestor de archivos" : L"Mandos y teclado";
-            else if (i == 0) title = L"Buscar carpeta de juegos";
-            else if (i == 1) title = L"Escribir ruta de juegos";
-            else if (i == 2) title = L"Importar claves de tu consola";
-            else if (i == 3) title = L"Escribir ruta de claves";
-            else if (i == 4) title = L"Importar firmware de tu consola";
-            else if (i == 5) title = L"Escribir ruta de firmware";
-            else title = L"Quitar carpeta: " + panel.status.sources[i - 6].name;
+            if (!panel.files) title = i == 0 ? L"File Manager" : L"Controllers and keyboard";
+            else if (i == 0) title = L"Browse for game folder";
+            else if (i == 1) title = L"Enter game folder path";
+            else if (i == 2) title = L"Import console keys";
+            else if (i == 3) title = L"Enter keys folder path";
+            else if (i == 4) title = L"Import console firmware";
+            else if (i == 5) title = L"Enter firmware folder path";
+            else title = L"Remove folder: " + panel.status.sources[i - 6].name;
             Text(title, layout.x + 72, y + (panel.files ? 10.0f : 13.0f), panel.files ? 20.0f : 22.0f,
                  0xf4f7fa, layout.width - 135, 32, !panel.files);
             if (!panel.files) {
-                Text(i == 0 ? L"Carpetas de juegos, claves y firmware de tu consola" :
-                              L"Elige tu dispositivo y personaliza los controles",
+                Text(i == 0 ? L"Game folders, keys, and console firmware" :
+                              L"Choose a controller and customize controls",
                      layout.x + 72, y + 47, 16, 0xb5c2d0, layout.width - 135, 26);
             }
             brush->SetColor(D2D1::ColorF(active ? 0x77e3bd : 0x9ba9ba));
@@ -535,29 +535,29 @@ private:
             target->DrawLine(D2D1::Point2F(cx + 1, cy), D2D1::Point2F(cx - 4, cy + 5), brush.Get(), 2);
         }
         if (!panel.files) {
-            Text(L"DATOS DEL EMULADOR", 180, 463, 12, 0x9ba9ba, 180, 26, true);
-            Text(panel.status.keys_ready ? L"Claves listas" : L"Claves pendientes", 380, 458, 16,
+            Text(L"EMULATOR DATA", 180, 463, 12, 0x9ba9ba, 180, 26, true);
+            Text(panel.status.keys_ready ? L"Keys ready" : L"Keys missing", 380, 458, 16,
                  panel.status.keys_ready ? 0x77e3bd : 0xf3ba6a, 220);
-            Text(L"Firmware: " + std::to_wstring(panel.status.firmware_files) + L" archivos",
+            Text(L"Firmware: " + std::to_wstring(panel.status.firmware_files) + L" files",
                  680, 458, 16, 0x9ba9ba, 350);
         }
-        if (panel.busy) Text(L"Importando " + std::to_wstring(panel.completed) + L" / " +
-                            std::to_wstring(panel.total) + L" archivos...", 130, 565, 18, 0x77e3bd, 990);
+        if (panel.busy) Text(L"Importing " + std::to_wstring(panel.completed) + L" / " +
+                            std::to_wstring(panel.total) + L" files...", 130, 565, 18, 0x77e3bd, 990);
         else Text(panel.notice, layout.x + 4, panel.files ? 561.0f : 497.0f, 16, 0xf3ba6a,
                   layout.width - 20, panel.files ? 40.0f : 28.0f, false, true);
-        ControlPrompt(Navigation::Explore, L"Elegir", layout.x + 4, layout.footer, 110);
-        ControlPrompt(Navigation::Play, L"Abrir", layout.x + 380, layout.footer, 110);
-        ControlPrompt(Navigation::Back, panel.busy ? L"Cancelar" : L"Volver",
+        ControlPrompt(Navigation::Explore, L"Select", layout.x + 4, layout.footer, 110);
+        ControlPrompt(Navigation::Play, L"Open", layout.x + 380, layout.footer, 110);
+        ControlPrompt(Navigation::Back, panel.busy ? L"Cancel" : L"Back",
                       layout.x + layout.width - 230, layout.footer, 150);
     }
     void ControlPrompt(Navigation action, const wchar_t* label, float x, float y,
                        float width, unsigned color = 0x9ba9ba) {
         struct Glyph { const wchar_t* asset; const wchar_t* fallback; };
         static constexpr std::array<Glyph, 6> keyboard{{
-            {L"keyboard_enter", L"Enter"}, {L"keyboard_arrows", L"Flechas"},
+            {L"keyboard_enter", L"Enter"}, {L"keyboard_arrows", L"Arrows"},
             {L"keyboard_f1", L"F1"}, {L"keyboard_r", L"R"}, {L"keyboard_escape", L"Esc"}, {L"keyboard_o", L"O"}}};
         static constexpr std::array<Glyph, 6> xbox{{
-            {L"xbox_a", L"A"}, {L"xbox_dpad", L"Cruceta"}, {L"xbox_view", L"View"},
+            {L"xbox_a", L"A"}, {L"xbox_dpad", L"D-pad"}, {L"xbox_view", L"View"},
             {L"xbox_menu", L"Menu"}, {L"xbox_b", L"B"}, {L"xbox_x", L"X"}}};
         const auto index = static_cast<unsigned>(action);
         if (action == Navigation::AddFolder) {
@@ -633,7 +633,7 @@ private:
         if (!format) {
             winrt::check_hresult(write->CreateTextFormat(L"Segoe UI", nullptr,
                 bold ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"es-ES", &format));
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, L"en-US", &format));
             if (center) {
                 format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                 format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);

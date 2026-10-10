@@ -3119,3 +3119,41 @@ Solo se usaron archivos temporales; no se modificaron partidas del usuario.
 
 Trampa de compilacion: R_THROW no acepta una construccion Result con coma sin
 proteger; usar constexpr Result local para el error FS5305.
+
+## Idioma del juego y comparación de caché fría/caliente (11 oct 2026)
+
+Nintendo documenta que el juego usa el idioma del sistema Switch cuando ese idioma está soportado.
+Mario Kart 8 Deluxe también remite a los ajustes de idioma de la consola. El arranque UWP ya pide
+`EnglishAmerican` y `USA` antes de `system.Initialize()` y `system.Load()`; en `GetLanguageCodeFromIndex`
+eso corresponde al índice de sistema 1 y al código `EN_US`. El servicio NS recorre la prioridad de
+American English y acepta la primera entrada presente en la máscara del NACP. La nueva línea del log
+registra índice/código solicitados, máscara del título e índice `ApplicationLanguage` elegido; en esa
+enumeración `0` es `AmericanEnglish`, `5` es español latino y `6` español. No forzar otro idioma ni
+atribuir el español a una región del dump hasta leer esa línea para Mario Kart y Wonder. Si NS devuelve
+0 y el juego aún se ve en español, revisar la selección guardada/ajuste propio del título y los datos
+concretos del juego y su actualización.
+
+La rutina de prueba debe separar dos preguntas:
+
+1. **Arranque frío:** usar una caché vacía del título solo cuando se mida por primera vez el coste de
+   compilación. Registrar compilaciones/PSO y tirones; no comparar esa pasada con rendimiento estable.
+2. **Repetición caliente:** reiniciar Eden sin borrar la caché y repetir la misma escena y duración.
+   La caché D3D12 del fork está bajo `ShaderDir/<title-id>/d3d12.bin`; `d3d12_hot.bin` conserva el
+   historial de PSO que se precalientan. El log indica cuántas tuberías se cargaron y cuántos PSO se
+   construyeron al inicio. Mantener ambas pasadas como resultados separados y fijar build, versión
+   del juego/actualización, opciones gráficas, ruta de juego y tramo de gameplay.
+
+Esto coincide con patrones útiles de otros backends: Eden separa el shader cache del Vulkan pipeline
+cache y persiste por título; Xenia explica que limpiar repetidamente su caché persistente puede ser
+lento y causar más tirones; Dolphin carga los shaders/UID conocidos, compila los faltantes en segundo
+plano y permite esperar por toda la compilación al inicio. Para la Series, conservar la caché entre
+repeticiones de rendimiento y borrar solo la caché de un título al preparar deliberadamente una
+medición fría. No borrar datos de guardado para hacer una prueba de caché.
+
+Fuentes primarias:
+
+- [Nintendo: idioma de juegos según la consola](https://www.nintendo.com/en-gb/Support/Purchases-Subscriptions/Can-I-Play-My-Game-in-Another-Language-1508494.html)
+- [Nintendo: historial de actualizaciones de Mario Kart 8 Deluxe](https://en-americas-support.nintendo.com/app/answers/detail/a_id/43255/~/mario-kart-8-deluxe-update-history)
+- [Eden: ajustes de caché persistente y caché de pipelines Vulkan](https://github.com/eden-emulator/mirror/blob/master/docs/user/Settings.md)
+- [Xenia D3D12: decisión de no ofrecer ClearCache para la caché persistente](https://github.com/xenia-project/xenia/blob/master/src/xenia/gpu/d3d12/pipeline_cache.h)
+- [Dolphin: carga de caché y compilación asíncrona de shaders](https://github.com/dolphin-emu/dolphin/blob/master/Source/Core/VideoCommon/ShaderCache.cpp)

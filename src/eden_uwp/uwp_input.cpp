@@ -241,19 +241,19 @@ bool SaveKeyboardBindings(const KeyboardBindings& bindings) {
     } catch (const winrt::hresult_error&) { return false; }
 }
 std::wstring KeyboardKeyName(unsigned key) {
-    if (!key) return L"Sin asignar";
+    if (!key) return L"Unassigned";
     if ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9')) return std::wstring(1, static_cast<wchar_t>(key));
     if (key >= 112 && key <= 135) return L"F" + std::to_wstring(key - 111);
     if (key >= 96 && key <= 105) return L"Num " + std::to_wstring(key - 96);
     switch (key) {
-    case 8: return L"Retroceso"; case 9: return L"Tab"; case 13: return L"Enter";
+    case 8: return L"Backspace"; case 9: return L"Tab"; case 13: return L"Enter";
     case 16: return L"Shift"; case 17: return L"Ctrl"; case 18: return L"Alt";
-    case 32: return L"Espacio"; case 33: return L"Re Pag"; case 34: return L"Av Pag";
-    case 35: return L"Fin"; case 36: return L"Inicio"; case 37: return L"Izquierda";
-    case 38: return L"Arriba"; case 39: return L"Derecha"; case 40: return L"Abajo";
-    case 45: return L"Insert"; case 46: return L"Supr"; case 106: return L"Num *";
+    case 32: return L"Space"; case 33: return L"Page Up"; case 34: return L"Page Down";
+    case 35: return L"End"; case 36: return L"Home"; case 37: return L"Left";
+    case 38: return L"Up"; case 39: return L"Right"; case 40: return L"Down";
+    case 45: return L"Insert"; case 46: return L"Delete"; case 106: return L"Num *";
     case 107: return L"Num +"; case 109: return L"Num -"; case 110: return L"Num .";
-    case 111: return L"Num /"; default: return L"Tecla " + std::to_wstring(key);
+    case 111: return L"Num /"; default: return L"Key " + std::to_wstring(key);
     }
 }
 void InitializeKeyboardBindings() {

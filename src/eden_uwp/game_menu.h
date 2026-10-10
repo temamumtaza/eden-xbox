@@ -136,11 +136,11 @@ public:
     static std::string StyleName(ConsoleControllerStyle style) {
         switch (style) {
         case ConsoleControllerStyle::Pro:         return "PRO CONTROLLER";
-        case ConsoleControllerStyle::DualJoycon:  return "JOY-CON DOBLES";
-        case ConsoleControllerStyle::Handheld:    return "MODO PORTATIL";
-        case ConsoleControllerStyle::LeftJoycon:  return "JOY-CON IZQUIERDO";
-        case ConsoleControllerStyle::RightJoycon: return "JOY-CON DERECHO";
-        default:                                  return "AUTOMATICO";
+        case ConsoleControllerStyle::DualJoycon:  return "DUAL JOY-CON";
+        case ConsoleControllerStyle::Handheld:    return "HANDHELD MODE";
+        case ConsoleControllerStyle::LeftJoycon:  return "LEFT JOY-CON";
+        case ConsoleControllerStyle::RightJoycon: return "RIGHT JOY-CON";
+        default:                                  return "AUTOMATIC";
         }
     }
 
@@ -148,19 +148,19 @@ private:
     std::string Line(Item item) const {
         switch (item) {
         case Continue:
-            return "CONTINUAR";
+            return "RESUME";
         case Style:
-            return "LA CONSOLA LO VE COMO  < " + StyleName(settings.style) + " >";
+            return "CONTROLLER TYPE  < " + StyleName(settings.style) + " >";
         case FaceButtons:
-            return std::string{"BOTONES A B X Y  < "} +
-                   (settings.swap_face_buttons ? "POR POSICION" : "POR LETRA") + " >";
+            return std::string{"A B X Y BUTTON ORDER  < "} +
+                   (settings.swap_face_buttons ? "POSITION" : "LABEL") + " >";
         case Deadzone:
-            return "ZONA MUERTA  < " +
+            return "STICK DEADZONE  < " +
                    std::to_string(static_cast<int>(settings.deadzone * 100 + 0.5f)) + "% >";
         case FullScreen:
-            return std::string{"PANTALLA COMPLETA  < "} + (settings.fullscreen ? "SI" : "NO") + " >";
+            return std::string{"FULLSCREEN  < "} + (settings.fullscreen ? "ON" : "OFF") + " >";
         case Library:
-            return "VOLVER AL INICIO";
+            return "BACK TO LIBRARY";
         }
         return {};
     }

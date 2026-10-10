@@ -579,7 +579,7 @@ int RunHeadlessBoot(const std::string& nro_path, const BootSurface& surface,
             const size_t selected = menu->Selected();
             system.GPU().RunOnGpuThread([&] {
                 D3D12::ShowGameMenu(system.Renderer(), "MENU", lines, selected,
-                                    "A ELEGIR   B VOLVER   < > CAMBIAR");
+                                    "A SELECT   B BACK   < > CHANGE");
             });
         };
         constexpr auto TICK = std::chrono::milliseconds(20);
@@ -2022,18 +2022,18 @@ struct BootView : implements<BootView, IFrameworkViewSource, IFrameworkView> {
             }
             worker.join();
             if (show_library && boot_status.load() == 2) {
-                library_error = "No se pudo cargar el juego. Comprueba el USB, los permisos y los datos del juego.";
+                library_error = "Could not load the game. Check the USB drive, permissions, and game files.";
                 WriteDiag("boot load failed; returning to library for recovery");
                 continue;
             }
             if (show_library && boot_status.load() == EdenXbox::LOAD_OUT_OF_MEMORY) {
-                library_error = "No hay memoria suficiente para cargar. En Dev Home, cambia Eden a tipo Game "
-                                "y vuelve a intentarlo.";
+                library_error = "Not enough memory to load the game. In Dev Home, set Eden's app type to Game "
+                                "and try again.";
                 WriteDiag("boot load ran out of memory; returning to library for recovery");
                 continue;
             }
             if (show_library && boot_status.load() == 15) {
-                library_error = "El juego se detuvo por un fallo de gráficos o falta de memoria.";
+                library_error = "The game stopped because of a graphics error or low memory.";
                 WriteDiag("GPU failure handled; returning to library for recovery");
                 continue;
             }

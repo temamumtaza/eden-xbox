@@ -192,8 +192,9 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationDesiredLanguage(
     LOG_INFO(Service_NS, "called with supported_languages={:08X}", supported_languages);
 
     // Get language code from settings
-    const auto language_code =
-        Set::GetLanguageCodeFromIndex(static_cast<s32>(Settings::values.language_index.GetValue()));
+    const auto requested_language_index = Settings::values.language_index.GetValue();
+    const auto language_code = Set::GetLanguageCodeFromIndex(
+        static_cast<s32>(requested_language_index));
 
     // Convert to application language, get priority list
     const auto application_language = ConvertToApplicationLanguage(language_code);
@@ -212,6 +213,10 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationDesiredLanguage(
         const auto supported_flag = GetSupportedLanguageFlag(lang);
         if (supported_languages == 0 || (supported_languages & supported_flag) == supported_flag) {
             *out_desired_language = lang;
+            LOG_INFO(Service_NS,
+                     "GetApplicationDesiredLanguage: requested system language index {} (code {:016X}); selected application language index {} from supported mask {:08X}",
+                     requested_language_index, static_cast<u64>(language_code),
+                     static_cast<u32>(lang), supported_languages);
             R_SUCCEED();
         }
     }

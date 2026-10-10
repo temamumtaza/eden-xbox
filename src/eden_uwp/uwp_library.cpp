@@ -123,7 +123,7 @@ FolderBrowserLoadResult LoadFolderBrowserPage(
     result.page = page;
     if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
     if (!at_roots && !current) {
-        result.error = L"No hay una carpeta disponible para explorar.";
+        result.error = L"No folder is available to browse.";
         return result;
     }
 
@@ -135,13 +135,13 @@ FolderBrowserLoadResult LoadFolderBrowserPage(
         };
         std::vector<RootCandidate> roots;
         auto local = winrt::Windows::Storage::ApplicationData::Current().LocalFolder();
-        roots.push_back({L"Almacenamiento interno de Eden", local, {}});
+        roots.push_back({L"Eden internal storage", local, {}});
         try {
             auto volumes = AwaitFolderOperation(
                 winrt::Windows::Storage::KnownFolders::RemovableDevices().GetFoldersAsync(), control);
             for (const auto& volume : volumes) {
                 if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
-                roots.push_back({L"Dispositivo extraible: " + FolderDisplayName(volume, L"Unidad"), volume, {}});
+                roots.push_back({L"Removable drive: " + FolderDisplayName(volume, L"Drive"), volume, {}});
             }
         } catch (const winrt::hresult_error&) {
             if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
@@ -152,7 +152,7 @@ FolderBrowserLoadResult LoadFolderBrowserPage(
         // large saved grant list cannot stall navigation or allocate an unbounded view.
         const auto grants = StorageApplicationPermissions::FutureAccessList().Entries();
         for (const auto& entry : grants)
-            roots.push_back({L"Acceso guardado", nullptr, entry.Token});
+            roots.push_back({L"Saved access", nullptr, entry.Token});
 
         const auto page_range = GetFolderBrowserPageRange(roots.size(), page);
         for (size_t i = page_range.begin; i < page_range.end; ++i) {
@@ -162,7 +162,7 @@ FolderBrowserLoadResult LoadFolderBrowserPage(
                 try {
                     candidate.folder = AwaitFolderOperation(
                         StorageApplicationPermissions::FutureAccessList().GetFolderAsync(candidate.token), control);
-                    candidate.label += L": " + FolderDisplayName(candidate.folder, L"Carpeta guardada");
+                    candidate.label += L": " + FolderDisplayName(candidate.folder, L"Saved folder");
                 } catch (const winrt::hresult_error&) {
                     if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; return result; }
                     continue; // Stale grants do not prevent access to later entries.
@@ -171,7 +171,7 @@ FolderBrowserLoadResult LoadFolderBrowserPage(
             result.entries.push_back({std::move(candidate.label), std::move(candidate.folder)});
         }
         result.has_more = page_range.has_more;
-        result.location = L"Ubicaciones disponibles para Eden";
+        result.location = L"Locations available to Eden";
         return result;
     }
 
@@ -186,12 +186,12 @@ FolderBrowserLoadResult LoadFolderBrowserPage(
         for (uint32_t i = 0; i < visible; ++i) {
             if (stop.stop_requested() || control->IsCancelled()) { result.cancelled = true; result.entries.clear(); return result; }
             const auto folder = folders.GetAt(i);
-            result.entries.push_back({FolderDisplayName(folder, L"Carpeta"), folder});
+            result.entries.push_back({FolderDisplayName(folder, L"Folder"), folder});
         }
         result.has_more = folders.Size() > FolderBrowserPageSize;
     } catch (const winrt::hresult_error&) {
         if (stop.stop_requested() || control->IsCancelled()) result.cancelled = true;
-        else result.error = L"Windows no pudo enumerar esta carpeta. Comprueba los permisos y que la unidad siga conectada.";
+        else result.error = L"Windows could not list this folder. Check permissions and make sure the drive is connected.";
     }
     return result;
 }
@@ -216,7 +216,7 @@ StorageFolder NavigateFolderPath(StorageFolder folder, std::wstring_view path,
         const auto length = (end == std::wstring_view::npos ? path.size() : end) - offset;
         const auto component = path.substr(offset, length);
         if (component == L"." || component == L".." || component.empty())
-            throw FolderPathFailure{L"La ruta contiene un componente no valido."};
+            throw FolderPathFailure{L"The path contains an invalid component."};
         folder = AwaitFolderOperation(folder.GetFolderAsync(winrt::hstring{component}), control);
         if (end == std::wstring_view::npos) break;
         offset = end + 1;
@@ -275,12 +275,12 @@ std::wstring FolderPathError(const winrt::hresult_error& error, bool unc) {
     const HRESULT hr = error.code();
     const DWORD code = HRESULT_CODE(hr);
     if (hr == E_ACCESSDENIED || code == ERROR_ACCESS_DENIED)
-        return L"Acceso denegado. Windows no permite esta ruta a la app; las rutas privadas de Xbox siguen dentro del sandbox.";
+        return L"Access denied. Windows does not allow the app to use this path; private Xbox paths remain sandboxed.";
     if (code == ERROR_PATH_NOT_FOUND || code == ERROR_FILE_NOT_FOUND || code == ERROR_NOT_FOUND)
-        return L"No se encontro la carpeta. Comprueba la ruta y que la unidad este conectada.";
+        return L"Folder not found. Check the path and make sure the drive is connected.";
     if (unc)
-        return L"No se pudo alcanzar o abrir la carpeta de red. Comprueba SMB y que Windows tenga acceso. No se guardan credenciales.";
-    return L"No se pudo abrir la carpeta. Comprueba que la ruta sea absoluta y que Windows permita el acceso.";
+        return L"Could not reach or open the network folder. Check SMB and Windows access. Credentials are not saved.";
+    return L"Could not open the folder. Check that the path is absolute and Windows allows access.";
 }
 
 } // namespace
@@ -327,7 +327,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
     auto controller_notice_until = std::chrono::steady_clock::time_point{};
     auto save_keyboard = [&] {
         const bool saved = SaveKeyboardBindings(panel.keyboard.bindings);
-        panel.keyboard.notice = saved ? L"Teclado guardado" : L"No se pudo guardar el teclado";
+        panel.keyboard.notice = saved ? L"Keyboard settings saved" : L"Could not save keyboard settings";
         keyboard_notice_until = saved ? std::chrono::steady_clock::now() + std::chrono::seconds{3} :
                                        std::chrono::steady_clock::time_point::max();
         dirty = true;
@@ -341,7 +341,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
     auto insert_path_text = [&](std::wstring_view value) {
         if (value.empty() || configuration.path_resolving) return;
         if (configuration.path_text.size() + value.size() > FolderPathInputLimit) {
-            configuration.path_error = L"La ruta supera el limite de 1024 caracteres.";
+            configuration.path_error = L"The path exceeds the 1,024-character limit.";
             dirty = true;
             return;
         }
@@ -457,7 +457,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                 if (key != VirtualKey::Escape) {
                     if (AssignKeyboardKey(editor.bindings, editor.selected, static_cast<unsigned>(key))) save_keyboard();
                     else {
-                        editor.notice = L"Esa tecla no es compatible";
+                        editor.notice = L"That key is not supported";
                         keyboard_notice_until = std::chrono::steady_clock::time_point::max();
                     }
                 }
@@ -681,7 +681,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                 try {
                     RememberGameFolder(added, stop);
                 } catch (const winrt::hresult_error& e) {
-                    result.error = "No se pudo guardar la carpeta externa: " + winrt::to_string(e.message());
+                    result.error = "Could not save the external folder: " + winrt::to_string(e.message());
                 } catch (const std::exception& e) {
                     result.error = e.what();
                 }
@@ -697,12 +697,12 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     std::make_move_iterator(external.entries.begin()), std::make_move_iterator(external.entries.end()));
             } catch (const winrt::hresult_error& e) {
                 if (!result.error.empty()) result.error += " | ";
-                result.error += "No se pudo recuperar una carpeta externa: " + winrt::to_string(e.message());
+                result.error += "Could not restore an external folder: " + winrt::to_string(e.message());
             } catch (const std::exception& e) {
                 if (!result.error.empty()) result.error += " | ";
                 result.error += e.what();
             }
-            if (!result.entries.empty() && result.error == "La carpeta games esta vacia o no existe.") result.error.clear();
+            if (!result.entries.empty() && result.error == "The games folder is empty or does not exist.") result.error.clear();
             std::sort(result.entries.begin(), result.entries.end(), [](const auto& a, const auto& b) {
                 return a.launch_path < b.launch_path;
             });
@@ -753,14 +753,14 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     result.at_roots = roots;
                     result.page = first;
                     result.cancelled = stop.stop_requested() || operation_control->IsCancelled();
-                    if (!result.cancelled) result.error = L"No se pudo enumerar esta ubicacion: " + std::wstring{error.message()};
+                    if (!result.cancelled) result.error = L"Could not list this location: " + std::wstring{error.message()};
                     return result;
                 } catch (...) {
                     FolderBrowserLoadResult result;
                     result.at_roots = roots;
                     result.page = first;
                     result.cancelled = stop.stop_requested() || operation_control->IsCancelled();
-                    if (!result.cancelled) result.error = L"No se pudo enumerar esta ubicacion.";
+                    if (!result.cancelled) result.error = L"Could not list this location.";
                     return result;
                 }
             }};
@@ -771,7 +771,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
     };
     auto open_folder_browser = [&] {
         if (folder_browser_future.valid()) {
-            configuration.notice = L"Espera a que termine la comprobacion anterior.";
+            configuration.notice = L"Wait for the previous check to finish.";
             dirty = true;
             return;
         }
@@ -794,10 +794,10 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         browser_current = nullptr;
         browser_stack.clear();
         if (purpose == FolderPathPurpose::Games) {
-            configuration.notice = L"Carpeta seleccionada. Agregando juegos a la biblioteca...";
+            configuration.notice = L"Folder selected. Adding games to the library...";
             start_scan(std::move(folder));
         } else {
-            configuration.notice = L"Carpeta seleccionada. Importando archivos...";
+            configuration.notice = L"Folder selected. Importing files...";
             begin_import(std::move(folder), purpose == FolderPathPurpose::Keys ? 1U : 2U);
         }
         dirty = true;
@@ -849,22 +849,22 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
     auto begin_folder_path_resolution = [&] {
         auto path = NormalizeExternalFolderPath(configuration.path_text);
         if (path.empty()) {
-            configuration.path_error = L"Escribe una ruta de carpeta.";
+            configuration.path_error = L"Enter a folder path.";
             dirty = true;
             return;
         }
         if (path.size() > FolderPathInputLimit) {
-            configuration.path_error = L"La ruta supera el limite de 1024 caracteres.";
+            configuration.path_error = L"The path exceeds the 1,024-character limit.";
             dirty = true;
             return;
         }
         if (!IsAllowedAbsoluteFolderPath(path)) {
-            configuration.path_error = L"Escribe una ruta absoluta como D:\\Juegos o \\\\servidor\\carpeta.";
+            configuration.path_error = L"Enter an absolute path such as D:\\Games or \\\\server\\folder.";
             dirty = true;
             return;
         }
         if (folder_path_future.valid()) {
-            configuration.path_error = L"La comprobacion anterior sigue en curso. Espera o cancelala.";
+            configuration.path_error = L"The previous check is still running. Wait for it or cancel it.";
             dirty = true;
             return;
         }
@@ -894,7 +894,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     if (!result.cancelled) result.error = FolderPathError(error, is_unc);
                 } catch (...) {
                     result.cancelled = stop.stop_requested() || operation_control->IsCancelled();
-                    if (!result.cancelled) result.error = L"No se pudo abrir la carpeta. Comprueba la ruta y los permisos.";
+                    if (!result.cancelled) result.error = L"Could not open the folder. Check the path and permissions.";
                 }
                 return result;
             }};
@@ -906,18 +906,18 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         if (configuration.path_resolving || configuration.path_key >= FolderPathKeyboardKeyCount) return;
         const auto label = FolderPathKeyboardKey(configuration.path_key, configuration.path_symbols);
         if (label.empty()) return;
-        if (label == L"Agregar") { begin_folder_path_resolution(); return; }
-        if (label == L"Borrar") { erase_path_before_cursor(); return; }
-        if (label == L"Izquierda") { move_path_cursor(false); return; }
-        if (label == L"Derecha") { move_path_cursor(true); return; }
-        if (label == L"Simbolos") { configuration.path_symbols = true; dirty = true; return; }
-        if (label == L"Letras") { configuration.path_symbols = false; dirty = true; return; }
-        if (label == L"Mayus") { configuration.path_uppercase = !configuration.path_uppercase; dirty = true; return; }
-        if (label == L"Limpiar") {
+        if (label == L"Add") { begin_folder_path_resolution(); return; }
+        if (label == L"Backspace") { erase_path_before_cursor(); return; }
+        if (label == L"Left") { move_path_cursor(false); return; }
+        if (label == L"Right") { move_path_cursor(true); return; }
+        if (label == L"Symbols") { configuration.path_symbols = true; dirty = true; return; }
+        if (label == L"Letters") { configuration.path_symbols = false; dirty = true; return; }
+        if (label == L"Caps") { configuration.path_uppercase = !configuration.path_uppercase; dirty = true; return; }
+        if (label == L"Clear") {
             configuration.path_text.clear(); configuration.path_cursor = 0;
             configuration.path_error.clear(); dirty = true; return;
         }
-        if (label == L"Espacio") { insert_path_text(L" "); return; }
+        if (label == L"Space") { insert_path_text(L" "); return; }
         insert_path_text(FolderPathKeyboardInput(configuration.path_key, configuration.path_symbols,
                                                   configuration.path_uppercase));
     };
@@ -1057,9 +1057,9 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     auto folder = picker.GetResults();
                     if (folder && picker_kind == 0) start_scan(folder);
                     else if (folder) begin_import(folder, picker_kind);
-                    else { configuration.notice = L"Seleccion cancelada."; dirty = true; }
+                    else { configuration.notice = L"Selection cancelled."; dirty = true; }
                 } catch (const winrt::hresult_error& e) {
-                    configuration.notice = L"No se pudo seleccionar la carpeta: " + std::wstring{e.message()}; dirty = true;
+                    configuration.notice = L"Could not select the folder: " + std::wstring{e.message()}; dirty = true;
                 }
                 picker = nullptr;
                 previous = {};
@@ -1079,12 +1079,12 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         }
         if (setup_future.valid() && setup_future.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
             try { configuration.status = setup_future.get(); }
-            catch (...) { configuration.notice = L"No se pudo comprobar la configuracion de archivos."; }
+            catch (...) { configuration.notice = L"Could not check file setup."; }
             configuration.selected = std::min(configuration.selected, ConfigurationRowCount(configuration) - 1);
             dirty = true;
         }
         if (configuration.busy) {
-            if (actions & Quit) { import_worker.request_stop(); configuration.notice = L"Cancelando importacion..."; }
+            if (actions & Quit) { import_worker.request_stop(); configuration.notice = L"Cancelling import..."; }
             actions = 0;
             const auto done = import_progress.completed.load(std::memory_order_relaxed);
             const auto total = import_progress.total.load(std::memory_order_relaxed);
@@ -1094,8 +1094,8 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             if (import_future.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
                 try {
                     const auto error = import_future.get();
-                    configuration.notice = error.empty() ? L"Importacion completa. Datos listos en almacenamiento interno." : std::wstring{winrt::to_hstring(error)};
-                } catch (...) { configuration.notice = L"No se pudo importar; se conserva la instalacion anterior."; }
+                    configuration.notice = error.empty() ? L"Import complete. Files are ready in internal storage." : std::wstring{winrt::to_hstring(error)};
+                } catch (...) { configuration.notice = L"Import failed; the previous installation was kept."; }
                 configuration.busy = false;
                 // The old metadata worker has joined; discard results before rescanning.
                 metadata = {};
@@ -1150,7 +1150,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         if (folder_path_future.valid() && folder_path_future.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
             FolderPathResolution result;
             try { result = folder_path_future.get(); }
-            catch (...) { result.error = L"No se pudo comprobar la carpeta."; }
+            catch (...) { result.error = L"Could not check the folder."; }
             if (folder_path_worker.joinable()) folder_path_worker.join();
             folder_path_control.reset();
             if (!folder_path_cancelled && configuration.path_entry_open && configuration.path_resolving) {
@@ -1161,16 +1161,16 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     configuration.path_text.clear();
                     configuration.path_error.clear();
                     if (purpose == FolderPathPurpose::Games) {
-                        configuration.notice = L"Carpeta accesible. Agregando juegos a la biblioteca...";
+                        configuration.notice = L"Folder is accessible. Adding games to the library...";
                         start_scan(result.folder);
                     } else {
-                        configuration.notice = L"Carpeta accesible. Importando archivos...";
+                        configuration.notice = L"Folder is accessible. Importing files...";
                         begin_import(result.folder, purpose == FolderPathPurpose::Keys ? 1U : 2U);
                     }
                 } else if (result.cancelled) {
                     configuration.path_entry_open = false;
                     configuration.path_text.clear();
-                } else configuration.path_error = result.error.empty() ? L"No se pudo abrir la carpeta." : result.error;
+                } else configuration.path_error = result.error.empty() ? L"Could not open the folder." : result.error;
                 dirty = true;
             }
             folder_path_cancelled = false;
@@ -1179,7 +1179,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             folder_browser_future.wait_for(std::chrono::seconds{0}) == std::future_status::ready) {
             FolderBrowserLoadResult result;
             try { result = folder_browser_future.get(); }
-            catch (...) { result.error = L"No se pudo enumerar esta ubicacion."; }
+            catch (...) { result.error = L"Could not list this location."; }
             if (folder_browser_worker.joinable()) folder_browser_worker.join();
             folder_browser_control.reset();
             if (!folder_browser_cancelled && configuration.browser_open) {
@@ -1240,16 +1240,16 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                 if (!configuration.files) {
                     if (configuration.selected == 0) { configuration.files = true; configuration.selected = 0; }
                     else { settings = true; return_to_configuration = true; }
-                } else if (loading || setup_future.valid()) configuration.notice = L"Espera a que termine la comprobacion de archivos.";
+                } else if (loading || setup_future.valid()) configuration.notice = L"Wait for the file check to finish.";
                 else if (configuration.selected >= 6) {
                     try {
                         ForgetGameFolder(configuration.status.sources[configuration.selected - 6].token);
-                        configuration.notice = L"Carpeta externa quitada de la biblioteca. Tus juegos siguen en su ubicacion.";
+                        configuration.notice = L"External folder removed from the library. Your games remain where they are.";
                         configuration.selected = 0; refresh_setup(); start_scan();
-                    } catch (...) { configuration.notice = L"No se pudo quitar la carpeta."; }
+                    } catch (...) { configuration.notice = L"Could not remove the folder."; }
                 } else if (configuration.selected == 1 || configuration.selected == 3 || configuration.selected == 5) {
                     if (folder_path_future.valid()) {
-                        configuration.notice = L"La comprobacion anterior sigue en curso; espera a que termine.";
+                        configuration.notice = L"The previous check is still running; wait for it to finish.";
                     } else {
                         configuration.path_entry_open = true;
                         configuration.path_resolving = false;
@@ -1275,9 +1275,9 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                             folder_picker.SuggestedStartLocation(winrt::Windows::Storage::Pickers::PickerLocationId::ComputerFolder);
                             folder_picker.FileTypeFilter().Append(L"*");
                             picker = folder_picker.PickSingleFolderAsync();
-                            configuration.notice = picker_kind == 0 ? L"Elige la carpeta de juegos." : picker_kind == 1 ?
-                                L"Elige la carpeta con prod.keys y, opcionalmente, title.keys." : L"Elige la carpeta de firmware extraido (.nca).";
-                        } catch (...) { configuration.notice = L"No se pudo abrir el selector de carpetas."; }
+                            configuration.notice = picker_kind == 0 ? L"Choose the game folder." : picker_kind == 1 ?
+                                L"Choose the folder with prod.keys and, optionally, title.keys." : L"Choose the folder with extracted firmware (.nca).";
+                        } catch (...) { configuration.notice = L"Could not open the folder picker."; }
                     }
                 }
                 dirty = true;
@@ -1295,14 +1295,14 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
             selected = std::min(selected, scan.entries.empty() ? 0 : scan.entries.size() - 1);
             notice = winrt::to_hstring(scan.error).c_str();
             if (added_folder_pending) {
-                configuration.notice = scan.error.empty() ? L"Carpeta externa agregada a la biblioteca." :
-                    L"No se pudo completar el registro o la exploracion: " + std::wstring{winrt::to_hstring(scan.error)};
+                configuration.notice = scan.error.empty() ? L"External folder added to the library." :
+                    L"Could not finish registering or scanning: " + std::wstring{winrt::to_hstring(scan.error)};
                 added_folder_pending = false;
             }
             if (notice.empty() && !initial_notice.empty()) notice = winrt::to_hstring(initial_notice).c_str();
             initial_notice = {};
             if (scan.limited) {
-                notice = L"Exploracion incompleta: se alcanzo un limite de fuentes, entradas o profundidad; pueden faltar juegos.";
+                notice = L"Scan incomplete: a source, entry, or depth limit was reached; some games may be missing.";
                 if (!scan.error.empty()) {
                     notice += L" ";
                     notice += winrt::to_hstring(scan.error).c_str();
@@ -1326,13 +1326,13 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         }
         if (actions & Play && !configuration.open && !settings && !panel.keyboard.open && !loading && !scan.entries.empty()) {
             selected_path = scan.entries[selected].launch_path;
-            notice = L"Comprobando acceso al juego...";
+            notice = L"Checking access to the game...";
             dirty = true;
             std::packaged_task<std::string()> task{[path = selected_path] {
                 winrt::init_apartment(winrt::apartment_type::multi_threaded);
                 struct Uninitialize { ~Uninitialize() { winrt::uninit_apartment(); } } guard;
                 if (!HasUsableHeaderKey() && !IsHomebrewNroPath(std::filesystem::path{path}))
-                    return std::string{"Faltan tus claves. Abre Configuracion > Gestor de archivos > Importar claves."};
+                    return std::string{"Your keys are missing. Open Settings > File Manager > Import console keys."};
                 return IsStoragePath(path) ? CheckExternalGame(path) : std::string{};
             }};
             validation = task.get_future();
@@ -1395,7 +1395,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
         if (device_changed || actions & (Swap | Zone)) {
             device_changed = false;
             const bool saved = SaveControllerOptions(options);
-            panel.notice = saved ? L"Configuracion guardada" : L"No se pudo guardar el mando";
+            panel.notice = saved ? L"Settings saved" : L"Could not save controller settings";
             controller_notice_until = saved ? now + std::chrono::seconds{3} :
                                              std::chrono::steady_clock::time_point::max();
         }
@@ -1413,7 +1413,7 @@ std::optional<std::string> ShowGameLibrary(void* core_window, unsigned width, un
                     dirty = true;
                     metadata_dirty = true;
                 }
-            } catch (const std::exception&) { notice = L"No se pudieron leer los datos de algunos juegos."; }
+            } catch (const std::exception&) { notice = L"Could not read metadata for some games."; }
         }
         const size_t page = selected / 5 * 5;
         if (!configuration.open && !loading && !metadata.valid() && !scan.entries.empty() &&

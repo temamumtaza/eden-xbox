@@ -58,14 +58,14 @@ int main() {
     assert(FolderPathKeyboardKey(10, true) == L"[");
     assert(FolderPathKeyboardKey(11, true) == L"]");
     assert(FolderPathKeyboardKey(14, true) == L"'");
-    assert(FolderPathKeyboardKey(19, false) == L"Mayus");
-    assert(FolderPathKeyboardDisplayKey(19, false, true) == L"Minus");
+    assert(FolderPathKeyboardKey(19, false) == L"Caps");
+    assert(FolderPathKeyboardDisplayKey(19, false, true) == L"Lower");
     assert(FolderPathKeyboardInput(0, false, false) == L"q");
     assert(FolderPathKeyboardInput(0, false, true) == L"Q");
     assert(FolderPathKeyboardInput(6, true, true) == L"&");
-    assert(FolderPathKeyboardKey(48, false) == L"Simbolos");
-    assert(FolderPathKeyboardKey(48, true) == L"Letras");
-    assert(FolderPathKeyboardKey(49, true) == L"Agregar");
+    assert(FolderPathKeyboardKey(48, false) == L"Symbols");
+    assert(FolderPathKeyboardKey(48, true) == L"Letters");
+    assert(FolderPathKeyboardKey(49, true) == L"Add");
     assert(FolderPathKeyboardKeyAt(FolderPathKeyX + 6 * (FolderPathKeyWidth + FolderPathKeyGapX) + 1,
                                   FolderPathKeyY + 1, true) == 6);
     assert(FolderPathKeyboardKeyAt(FolderPathKeyX + 10 * (FolderPathKeyWidth + FolderPathKeyGapX),

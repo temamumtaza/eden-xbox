@@ -2671,10 +2671,24 @@ HTTPS con el mismo pin local del Device Portal. La opción permite capturar una 
 SPIR-V→DXIL vuelve a fallar; la telemetría nueva de Mesa sigue siendo necesaria para saber la fase
 precisa del fallo.
 
-El cambio de código fija el idioma de sistema **English (US)** y la región **USA**. NS sigue la lista de
-prioridad del título cuando no declara en-US; el log registra su máscara de idiomas sin cambiar la
-preferencia global. La máscara `000070FD` de Z-A incluye el bit American English, así que el juego
-declara en-US. Esto no cambia el idioma de la interfaz de Eden o de Xbox.
+El arranque fija el sistema Switch emulado en **English (US)** y la región **USA** antes de
+`system.Load()`. El índice de sistema es 1 y `GetLanguageCodeFromIndex` lo convierte a `EN_US`.
+NS recorre la prioridad del título con esa preferencia; Z-A declara en-US en la máscara `000070FD`.
+El log anterior confirmaba la máscara y la preferencia, pero no registraba qué idioma NS elegía al
+responder al juego. La siguiente build añade índice y código solicitados, máscara, e índice
+`ApplicationLanguage` devuelto (0 = American English; 5 = español latino; 6 = español). Nintendo
+documenta que los juegos usan el idioma de sistema cuando el título lo soporta. El usuario reporta
+Mario Kart 8 y Mario Wonder en español; la causa sigue pendiente de leer esa respuesta NS para ambos.
+
+El frontend UWP propio usaba etiquetas y mensajes escritos directamente en español, además de
+`es-ES` como locale de DirectWrite. La siguiente build convierte esos textos a inglés y usa `en-US`
+para el formato de texto. Esto no cambia el idioma global de Xbox; componentes nativos de Windows,
+como su selector de carpetas, aún pueden seguir el idioma de la consola.
+
+La comparación de shaders separa arranque frío y repetición caliente. El backend D3D12 restaura por
+título `d3d12.bin` y el historial `d3d12_hot.bin`; reiniciar Eden sin borrar esos archivos mide una
+repetición caliente, no una compilación fría. La evidencia y el flujo reproducible están en
+`docs/xbox/xbox_performance.md`, con referencias a Eden, Xenia y Dolphin.
 
 El 11 oct se instaló el paquete diagnóstico `0.3.0.29`, construido como reempaquetado del binario
 `790cda073e56fa50d39ba554814ab8d4eed9e634` (artefacto UWP/Mesa del workflow #24) y con los scripts

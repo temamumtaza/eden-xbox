@@ -17,11 +17,11 @@ inline constexpr std::size_t ConsoleControllerStyleCount = 6;
 constexpr std::wstring_view ConsoleControllerStyleLabel(ConsoleControllerStyle style) {
     switch (style) {
     case ConsoleControllerStyle::Pro:         return L"Pro Controller";
-    case ConsoleControllerStyle::DualJoycon:  return L"Joy-Con dobles";
-    case ConsoleControllerStyle::Handheld:    return L"Modo portatil";
-    case ConsoleControllerStyle::LeftJoycon:  return L"Joy-Con izquierdo";
-    case ConsoleControllerStyle::RightJoycon: return L"Joy-Con derecho";
-    default:                                  return L"Automatico (segun el juego)";
+    case ConsoleControllerStyle::DualJoycon:  return L"Dual Joy-Con";
+    case ConsoleControllerStyle::Handheld:    return L"Handheld mode";
+    case ConsoleControllerStyle::LeftJoycon:  return L"Left Joy-Con";
+    case ConsoleControllerStyle::RightJoycon: return L"Right Joy-Con";
+    default:                                  return L"Automatic (game supported)";
     }
 }
 

@@ -16,10 +16,10 @@ inline constexpr KeyboardBindings DefaultKeyboardBindings{
     37, 38, 39, 40, 0, 0, 36, 35, 'W', 'S', 'A', 'D', 'I', 'L', 'J', 'O'};
 inline constexpr std::array<const wchar_t*, KeyboardActionCount> KeyboardActionNames{
     L"A", L"B", L"X", L"Y", L"Clic stick L", L"Clic stick R", L"L", L"R",
-    L"ZL", L"ZR", L"+", L"-", L"Cruceta izquierda", L"Cruceta arriba",
-    L"Cruceta derecha", L"Cruceta abajo", L"SL", L"SR", L"HOME", L"Captura",
-    L"L arriba", L"L abajo", L"L izquierda", L"L derecha",
-    L"R arriba", L"R abajo", L"R izquierda", L"R derecha"};
+    L"ZL", L"ZR", L"+", L"-", L"D-pad left", L"D-pad up",
+    L"D-pad right", L"D-pad down", L"SL", L"SR", L"HOME", L"Capture",
+    L"L up", L"L down", L"L left", L"L right",
+    L"R up", L"R down", L"R left", L"R right"};
 // One key per action. Move duplicate bindings instead of leaving hidden conflicts.
 inline bool AssignKeyboardKey(KeyboardBindings& bindings, size_t action, unsigned key) {
     if (action >= bindings.size() || key == 27 || key > 254 || (key >= 195 && key <= 218)) return false;

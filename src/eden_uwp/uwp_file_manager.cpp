@@ -39,7 +39,7 @@ void RequireInternalDestination(const std::filesystem::path& destination) {
     const auto lower = [](wchar_t c) { return std::towlower(c); };
     std::transform(base.begin(), base.end(), base.begin(), lower);
     std::transform(path.begin(), path.end(), path.begin(), lower);
-    if (!path.starts_with(base + L"\\")) throw std::runtime_error("Destino fuera del almacenamiento de la app.");
+    if (!path.starts_with(base + L"\\")) throw std::runtime_error("Destination is outside app storage.");
 }
 
 // Directory publication is confined to the app's internal keys/system-content folders.
@@ -152,12 +152,12 @@ FileSetupStatus ReadFileSetupStatus() {
         const auto token = winrt::to_string(entry.Token);
         if (!token.starts_with("eden-games-")) continue;
         auto name = std::filesystem::path{std::wstring{entry.Metadata}}.filename().wstring();
-        result.sources.push_back({token, name.empty() ? L"Carpeta USB" : name});
+        result.sources.push_back({token, name.empty() ? L"USB folder" : name});
     }
     return result;
 }
 void ForgetGameFolder(std::string_view token) {
-    if (!token.starts_with("eden-games-")) throw std::invalid_argument("Fuente de juegos no valida.");
+    if (!token.starts_with("eden-games-")) throw std::invalid_argument("Invalid game-folder token.");
     StorageApplicationPermissions::FutureAccessList().Remove(winrt::to_hstring(token));
 }
 
@@ -167,7 +167,7 @@ std::string ImportSystemFiles(const StorageFolder& source, FileImport kind,
     StorageFolder stage{nullptr};
     try {
         const bool keys = kind == FileImport::Keys;
-        if (!keys && !HasUsableHeaderKey()) return "Primero importa tus claves de consola (prod.keys).";
+        if (!keys && !HasUsableHeaderKey()) return "Import your console keys (prod.keys) first.";
         const auto destination = keys ? Common::FS::GetEdenPath(Common::FS::EdenPath::KeysDir) : FirmwarePath();
         RecoverDirectory(destination);
         std::filesystem::create_directories(destination.parent_path());
@@ -195,41 +195,41 @@ std::string ImportSystemFiles(const StorageFolder& source, FileImport kind,
                     std::wstring extension{file.FileType()};
                     std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) { return std::towlower(c); });
                     if (extension == L".nca") files.push_back(file);
-                    if (files.size() > MaxFirmwareFiles) throw std::runtime_error("Demasiados archivos de firmware.");
+                    if (files.size() > MaxFirmwareFiles) throw std::runtime_error("Too many firmware files.");
                 }
                 if (page.Size() < PageSize) break;
-                if (start >= 16384) throw std::runtime_error("Elige una carpeta que contenga solo tu firmware.");
-                if (stop.stop_requested()) throw std::runtime_error("Importacion cancelada.");
+                if (start >= 16384) throw std::runtime_error("Choose a folder containing only your firmware.");
+                if (stop.stop_requested()) throw std::runtime_error("Import cancelled.");
             }
-            if (files.empty()) throw std::runtime_error("La carpeta no contiene firmware .nca extraido.");
+            if (files.empty()) throw std::runtime_error("The folder has no extracted .nca firmware files.");
         }
         progress.total.store(static_cast<unsigned>(files.size()), std::memory_order_relaxed);
         bool system_version = false, mii_editor = false;
         FileSys::RealVfsFilesystem vfs;
         for (const auto& file : files) {
-            if (stop.stop_requested()) throw std::runtime_error("Importacion cancelada; se conserva lo anterior.");
+            if (stop.stop_requested()) throw std::runtime_error("Import cancelled; the previous files were kept.");
             const auto bytes = AwaitStorageOperation(file.GetBasicPropertiesAsync(), stop).Size();
-            if (keys && bytes > 4 * 1024 * 1024) throw std::runtime_error("Archivo de claves demasiado grande.");
+            if (keys && bytes > 4 * 1024 * 1024) throw std::runtime_error("Key file is too large.");
             auto copied = AwaitStorageOperation(file.CopyAsync(stage, file.Name(), NameCollisionOption::FailIfExists), stop);
             if (AwaitStorageOperation(copied.GetBasicPropertiesAsync(), stop).Size() != bytes)
-                throw std::runtime_error("Copia incompleta.");
+                throw std::runtime_error("File copy was incomplete.");
             if (!keys) {
                 const auto path = std::filesystem::path{std::wstring{copied.Path()}};
                 const auto u8path = path.u8string();
                 auto raw = vfs.OpenFile(std::string{reinterpret_cast<const char*>(u8path.data()), u8path.size()}, FileSys::OpenMode::Read);
                 FileSys::NCA nca{raw};
-                if (nca.GetStatus() != Loader::ResultStatus::Success) throw std::runtime_error("Firmware no legible con estas claves; no se reemplaza lo instalado.");
+                if (nca.GetStatus() != Loader::ResultStatus::Success) throw std::runtime_error("Firmware could not be read with these keys; installed firmware was kept.");
                 const auto id = nca.GetTitleId();
-                if ((id >> 16) != (0x0100000000000000ULL >> 16)) throw std::runtime_error("La carpeta contiene un NCA de juego, no de firmware.");
+                if ((id >> 16) != (0x0100000000000000ULL >> 16)) throw std::runtime_error("The folder contains a game NCA, not firmware.");
                 system_version |= id == 0x0100000000000809ULL && nca.GetType() == FileSys::NCAContentType::Data;
                 mii_editor |= id == 0x0100000000001009ULL && nca.GetType() == FileSys::NCAContentType::Program;
             }
             progress.completed.fetch_add(1, std::memory_order_relaxed);
         }
         if (keys && !ValidProductionKeys(std::filesystem::path{std::wstring{stage.Path()}} / "prod.keys"))
-            throw std::runtime_error("prod.keys no contiene una header_key valida.");
-        if (!keys && (!system_version || !mii_editor)) throw std::runtime_error("Firmware incompleto: falta SystemVersion o MiiEdit.");
-        if (stop.stop_requested()) throw std::runtime_error("Importacion cancelada; se conserva lo anterior.");
+            throw std::runtime_error("prod.keys does not contain a valid header_key.");
+        if (!keys && (!system_version || !mii_editor)) throw std::runtime_error("Firmware is incomplete: SystemVersion or MiiEdit is missing.");
+        if (stop.stop_requested()) throw std::runtime_error("Import cancelled; the previous files were kept.");
         PublishDirectory(stage, destination);
         stage = nullptr;
         if (keys) Core::Crypto::KeyManager::Instance().ReloadKeys();
@@ -238,8 +238,8 @@ std::string ImportSystemFiles(const StorageFolder& source, FileImport kind,
     } catch (const winrt::hresult_error& e) {
         LOG_ERROR(Frontend, "File manager: import failed HRESULT={:08X}", static_cast<unsigned>(e.code().value));
         if (stage) { try { stage.DeleteAsync().get(); } catch (...) {} }
-        if (stop.stop_requested()) return "Importacion cancelada; se conserva lo anterior.";
-        return "No se pudo importar. Comprueba la carpeta, el espacio libre y la conexion del USB.";
+        if (stop.stop_requested()) return "Import cancelled; the previous files were kept.";
+        return "Import failed. Check the folder, free space, and USB connection.";
     } catch (const std::exception& e) {
         if (stage) { try { stage.DeleteAsync().get(); } catch (...) {} }
         return e.what();

@@ -39,7 +39,7 @@ inline LibraryScan ScanGameLibrary(const std::filesystem::path& root,
     LibraryScan result;
     std::error_code ec;
     if (!std::filesystem::is_directory(root, ec)) {
-        result.error = ec ? ec.message() : "La carpeta games esta vacia o no existe.";
+        result.error = ec ? ec.message() : "The games folder is empty or does not exist.";
         return result;
     }
     auto it = std::filesystem::recursive_directory_iterator{

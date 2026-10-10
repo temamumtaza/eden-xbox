@@ -46,7 +46,7 @@ void EnsureStorageApartment() {
 }
 
 std::string ErrorText(const winrt::hresult_error& e) {
-    return "USB/carpeta no disponible. Conectala o vuelve a agregarla. " +
+    return "USB/folder unavailable. Reconnect it or add it again. " +
            winrt::to_string(e.message());
 }
 void AddError(LibraryScan& scan, std::string_view error) {
@@ -432,7 +432,7 @@ std::string RememberGameFolder(const StorageFolder& folder, std::stop_token stop
         }
     }
     if (token.empty()) {
-        if (count >= MaxSources) throw std::runtime_error("Limite de 16 carpetas externas alcanzado.");
+        if (count >= MaxSources) throw std::runtime_error("The 16 external-folder limit has been reached.");
         GUID guid{};
         winrt::check_hresult(CoCreateGuid(&guid));
         token = "eden-games-";
@@ -477,18 +477,18 @@ std::string CheckExternalGame(std::string_view path) {
     try {
         auto fs = MakeUwpFilesystem();
         auto file = fs->OpenFile(path, FileSys::OpenMode::Read);
-        if (!file) return "No se pudo abrir el juego. Conecta el USB o vuelve a agregar su carpeta.";
+        if (!file) return "Could not open the game. Reconnect the USB drive or add its folder again.";
         std::array<u8, 64> bytes{};
         const auto size = file->GetSize();
         if (!size || file->Read(bytes.data(), std::min(bytes.size(), size), 0) != std::min(bytes.size(), size))
-            return "No se pudo leer el juego desde su carpeta.";
+            return "Could not read the game from its folder.";
         // Exercise 64-bit offsets before spending time constructing the guest.
         if (size > (u64{1} << 32) + bytes.size() &&
             file->Read(bytes.data(), bytes.size(), (u64{1} << 32) + 1) != bytes.size())
-            return "No se pudo leer el juego por encima de 4 GiB.";
+            return "Could not read the game beyond 4 GiB.";
         const auto count = std::min(bytes.size(), size);
         if (file->Read(bytes.data(), count, size - count) != count ||
-            file->Read(bytes.data(), 1, size) != 0) return "No se pudo leer el final del juego.";
+            file->Read(bytes.data(), 1, size) != 0) return "Could not read the end of the game file.";
         LOG_INFO(Frontend, "ROM storage: preflight passed size={} path={}", size, path);
         return {};
     } catch (const winrt::hresult_error& e) { return ErrorText(e); }

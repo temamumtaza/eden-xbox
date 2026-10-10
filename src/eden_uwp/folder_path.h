@@ -66,17 +66,17 @@ inline constexpr size_t FolderPathInputLimit = 1024;
 using FolderPathKeyboardLayout = std::array<std::array<std::wstring_view, 10>, 5>;
 inline constexpr FolderPathKeyboardLayout FolderPathLettersKeyboard{{
     {L"q", L"w", L"e", L"r", L"t", L"y", L"u", L"i", L"o", L"p"},
-    {L"a", L"s", L"d", L"f", L"g", L"h", L"j", L"k", L"l", L"Mayus"},
+    {L"a", L"s", L"d", L"f", L"g", L"h", L"j", L"k", L"l", L"Caps"},
     {L"z", L"x", L"c", L"v", L"b", L"n", L"m", L"_", L"-", L""},
     {L"0", L"1", L"2", L"3", L"4", L"5", L"6", L"7", L"8", L"9"},
-    {L"\\", L"/", L":", L".", L"Espacio", L"Borrar", L"Izquierda", L"Derecha", L"Simbolos", L"Agregar"},
+    {L"\\", L"/", L":", L".", L"Space", L"Backspace", L"Left", L"Right", L"Symbols", L"Add"},
 }};
 inline constexpr FolderPathKeyboardLayout FolderPathSymbolsKeyboard{{
     {L"!", L"@", L"#", L"$", L"%", L"^", L"&", L"*", L"(", L")"},
-    {L"[", L"]", L"{", L"}", L"'", L"+", L"=", L";", L",", L"Limpiar"},
+    {L"[", L"]", L"{", L"}", L"'", L"+", L"=", L";", L",", L"Clear"},
     {L"_", L"-", L"\\", L"/", L":", L".", L" ", L"<", L">", L"~"},
     {L"0", L"1", L"2", L"3", L"4", L"5", L"6", L"7", L"8", L"9"},
-    {L"\\", L"/", L":", L".", L"Espacio", L"Borrar", L"Izquierda", L"Derecha", L"Letras", L"Agregar"},
+    {L"\\", L"/", L":", L".", L"Space", L"Backspace", L"Left", L"Right", L"Letters", L"Add"},
 }};
 inline constexpr size_t FolderPathKeyboardRows = FolderPathLettersKeyboard.size();
 inline constexpr size_t FolderPathKeyboardColumns = FolderPathLettersKeyboard.front().size();
@@ -88,7 +88,7 @@ inline constexpr std::wstring_view FolderPathKeyboardKey(size_t key, bool symbol
 }
 inline std::wstring FolderPathKeyboardDisplayKey(size_t key, bool symbols, bool uppercase) {
     const auto label = FolderPathKeyboardKey(key, symbols);
-    if (label == L"Mayus" && uppercase) return L"Minus";
+    if (label == L"Caps" && uppercase) return L"Lower";
     if (!symbols && uppercase && label.size() == 1 && label[0] >= L'a' && label[0] <= L'z')
         return std::wstring{static_cast<wchar_t>(label[0] - (L'a' - L'A'))};
     return std::wstring{label};

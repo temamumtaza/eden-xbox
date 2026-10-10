@@ -79,7 +79,7 @@ int main() {
     check(menu.Apply(MenuAction::Left) == GameMenuResult::SettingsChanged);
     check(menu.Apply(MenuAction::Left) == GameMenuResult::SettingsChanged);
     check(menu.Settings().style == ConsoleControllerStyle::RightJoycon);
-    check(menu.Lines()[GameMenu::Style].find("JOY-CON DERECHO") != std::string::npos);
+    check(menu.Lines()[GameMenu::Style].find("RIGHT JOY-CON") != std::string::npos);
     menu.Apply(MenuAction::Down);
     check(menu.Apply(MenuAction::Confirm) == GameMenuResult::SettingsChanged && menu.Settings().swap_face_buttons);
     menu.Apply(MenuAction::Down);
@@ -94,12 +94,12 @@ int main() {
 
     // PC: full screen sits above "back to the library"; the Series menu never shows it.
     GameMenu pc{{ConsoleControllerStyle::Auto, false, 0.12f, true, false}};
-    check(pc.Lines().size() == 6 && pc.Lines()[4].find("PANTALLA COMPLETA  < NO >") == 0);
+    check(pc.Lines().size() == 6 && pc.Lines()[4].find("FULLSCREEN  < OFF >") == 0);
     pc.Apply(MenuAction::Up);
     pc.Apply(MenuAction::Up);
     check(pc.SelectedItem() == GameMenu::FullScreen && pc.Selected() == 4);
     check(pc.Apply(MenuAction::Confirm) == GameMenuResult::FullScreen && pc.Settings().fullscreen);
     check(pc.Apply(MenuAction::Right) == GameMenuResult::FullScreen && !pc.Settings().fullscreen);
-    for (const auto& line : menu.Lines()) check(line.find("PANTALLA") == std::string::npos);
+    for (const auto& line : menu.Lines()) check(line.find("FULLSCREEN") == std::string::npos);
     std::puts("game menu: combo hold/stagger/tap/held passthrough, navigation and settings PASS");
 }
