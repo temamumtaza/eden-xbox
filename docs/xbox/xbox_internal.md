@@ -2898,8 +2898,9 @@ valor solicitado y el valor leído de vuelta, o el error de WinRT. Para cada Mar
 mismo lanzamiento. Una segunda lectura del Device Portal confirmó `.37`; los logs siguen en la
 biblioteca/Z-A y no incluyen Mario Kart ni Wonder. El árbol de build exacto de `.37` ya está en la
 cache de Actions para el próximo cambio; el ahorro de tiempo del build incremental aún no se ha
-medido. Los cambios C++ y el marcador permanecen locales, sin compilar ni instalar; pasan las once
-pruebas del analizador macOS y `git diff --check`, y falta el gate UWP/Series.
+medido. Los cambios C++ y el marcador ya están publicados en `origin/xbox` (commit
+`65e5def94c`), pero siguen sin compilarse ni instalarse; pasan las once pruebas del analizador
+macOS y `git diff --check`, y falta el gate UWP/Series.
 
 Fuentes: [Microsoft, recursos del sistema para apps y juegos UWP en Xbox](https://learn.microsoft.com/en-us/previous-versions/windows/uwp/xbox-apps/system-resource-allocation),
 [Microsoft, Device Portal para Xbox](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/device-portal-xbox),
