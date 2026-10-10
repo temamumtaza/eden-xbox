@@ -2591,3 +2591,96 @@ revisión posterior, documentada en «Browser Xbox y rutas externas», añadió 
 ruta manual UNC/unidad, apertura directa de archivos y avisos de límites. El acceso
 físico a USB/SMB y la desconexión en Xbox siguen pendientes; esta auditoría inicial
 ya no describe el árbol fuente actual.
+
+## Prueba Z-A y selección de idioma del sistema (11 oct 2026)
+
+Logs recuperados del Device Portal el 11 oct con TLS verificado. El `eden_log.txt` activo estaba
+vacío y el `eden_uwp_diag.txt` más reciente terminaba en la biblioteca; por eso sus mensajes de
+renderer se analizaron en los archivos rotados, que corresponden a sesiones anteriores. El diag
+más reciente sí registra un arranque posterior de Pokémon Legends: Z-A con
+`system.Load() returned status 0`, vivo durante al menos 263 s y con un máximo observado de
+1984 MiB sobre 5120 MiB; ese bloque no registra cierre forzado. El archivo detallado rotado lleva
+una marca de inicio anterior y pertenece al binario `790cda`, así que sus errores no prueban el
+comportamiento visual de ese arranque posterior. La procedencia del binario rotado quedó
+correlacionada con GitHub
+Actions: el workflow de paquete #28 (`38028552672`) reutilizó el artefacto sin firmar del workflow
+de compilación #24 (`38009461324`), cuyo trabajo UWP/Mesa terminó correctamente en el commit
+`790cda073e56fa50d39ba554814ab8d4eed9e634`; falló después el trabajo de firma de ese intento.
+El empaquetado #28 aplicó además la reserva de pila de hilo de 16 MiB. Ese commit está tres
+revisiones antes del checkout actual `ed5dd8eb22`; por tanto, el log sí es evidencia del fallo en
+`790cda`, no una prueba de las tres revisiones posteriores ni del código diagnóstico sin empaquetar.
+El workflow asigna la versión APPX al empaquetar; el
+`0.2.75.0` de `dist/uwp/AppxManifest.xml` es solo el valor base del checkout, no contradice el
+`0.3.0.28` instalado. La sesión más reciente tenía un límite de
+5120 MiB y pasó de 652 a ~1984 MiB durante la ventana observada; el límite de 1024 MiB aparece
+en una sesión anterior. El límite de 5 GiB confirma que el proceso recibió el presupuesto de Game,
+aunque Eden figure en la categoría Apps de la biblioteca Xbox. El fallo no se explica por falta de
+presupuesto en esa sesión.
+
+- Antes de `system.Run()` se repiten 17 excepciones `D3D12: eden_spirv_to_dxil_pipeline failed`.
+  Once usan el par VS `a56cbff40df77b6e` + PS `fa4b2ee1b67cfe3e`; las otras seis, VS
+  `bb1937e482fff7f8` + PS `ffb21bdb2ee87c04`. Las claves de pipeline D3D12 varían, pero los mismos
+  pares vuelven a fallar; después, los draws con esos shaders se descartan. Esto sitúa la señal en
+  la traducción compartida del shader, antes de crear el PSO, y concuerda con las partes ausentes o
+  negras. `spirv_to_dxil:` no aportó el error previo: la API colapsa las salidas tempranas de la
+  traducción de pipeline en un `false` genérico. La nueva telemetría debe identificar cuál etapa y
+  fase falla dentro de esos pares.
+- Cerca del frame 10 aparece `Core.ARM: Cannot execute instruction at unmapped address 0x0`, con
+  PC guest `0x4`. El log por sí solo no demuestra si es causa independiente o una consecuencia
+  del estado del juego; conservarlo como segunda señal, sin atribuirlo al renderer.
+- La misma captura también registra conservative rasterization ignorado, una vista de textura
+  fuera de niveles/capas que se recorta, un SRV con dimensión incompatible que usa la dimensión del
+  recurso, reducción min/max de sampler sustituida por filtrado normal y blits depth-stencil que
+  copian solo depth. Un render condition hace espera CPU por falta de query slices. Son rutas de
+  compatibilidad que merecen pruebas visuales y de pacing separadas; ninguna demuestra por sí sola
+  la causa de los dos shaders rechazados.
+- El usuario informa que Mario Kart 8 funciona cerca de 60 FPS, con tirones al compilar/cargar
+  shaders por primera vez. El JSON de bug tracker descargado corresponde a Mario Kart 8 y cuenta
+  104510 frames con cero informes descartados, pero no mide el tiempo de pared; no confirma por sí
+  solo los 60 FPS. También registra 38 usos del formato de textura `0` sin implementar y 1584
+  copias omitidas entre una textura comprimida y otra decodificada por host. El juego siguió
+  produciendo el log largo, así que esos registros no equivalen a un cierre, aunque conviene
+  vigilarlos si aparecen artefactos visuales.
+- En el reporte upstream de Z-A #481, un usuario corrigió el render roto en Eden 0.2.1 con Vulkan
+  sobre AMD RADV al activar EDS2 y desactivar Vertex Input Dynamic State. Otro reporte, #139,
+  recoge la misma combinación. Ambos son pistas específicas de la ruta Vulkan/RADV, no ajustes que
+  se puedan trasladar directamente a nuestro renderer Xbox D3D12. El reporte #545 también describe
+  pantalla negra en Z-A con música y velocidad de cuadros aún activas, pero era Eden Android 0.2.1
+  en un S24 FE y ocurre tras salir de la zona de premios; solo corrobora un síntoma parecido, no
+  este fallo de Xbox. Además, aquí el log detecta
+  fallos de traducción SPIR-V→DXIL antes de poder probar paridad visual con esa ruta. Fuentes:
+  [reporte #481](https://github.com/eden-emulator/Issue-Reports/issues/481) y
+  [reporte #139](https://github.com/eden-emulator/Issue-Reports/issues/139).
+
+Para la siguiente build, `tools/xbox/mesa/eden_pipeline.c` distingue fallos de validación de
+etapas, `SPIR-V → NIR` y `NIR → DXIL`, incluyendo etapa y cantidad de palabras. También conecta
+el callback de error de `spirv_to_nir` para registrar el mensaje y el byte SPIR-V fallido; al
+devolver `NULL`, un shader inválido sigue la ruta normal de error de pipeline incluso en builds
+debug de Mesa, sin interrumpir el proceso. No se registran warnings como errores ni se cambia la
+traducción de shaders válidos. La API
+se comprobó contra el header fijado por el script de build en Mesa 26.2.3:
+[nir_spirv.h](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.2.3/src/compiler/spirv/nir_spirv.h)
+y [spirv_to_nir.c](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.2.3/src/compiler/spirv/spirv_to_nir.c).
+Hace falta reconstruir `spirv_to_dxil.dll` y el paquete UWP para que una nueva sesión identifique
+si los shaders Z-A fallan al analizar SPIR-V o en una fase posterior.
+
+Para facilitar esa captura sin otro build nativo, el workflow acepta ahora `dump_shader_hash` y
+lo convierte en una opción `boot.cfg` dentro del paquete. En una sesión con el hash configurado,
+`tools/xbox/download-shader-dump.py` recupera de LocalState los `.ir.txt` y `.spv` del hash por
+HTTPS con el mismo pin local del Device Portal. La opción permite capturar una etapa incluso si
+SPIR-V→DXIL vuelve a fallar; la telemetría nueva de Mesa sigue siendo necesaria para saber la fase
+precisa del fallo.
+
+El cambio de código fija el idioma de sistema **English (US)** y la región **USA**. NS sigue la lista de
+prioridad del título cuando no declara en-US; el log registra su máscara de idiomas sin cambiar la
+preferencia global. La máscara `000070FD` de Z-A incluye el bit American English, así que el juego
+declara en-US. Esto no cambia el idioma de la interfaz de Eden o de Xbox. Los cambios de idioma y
+telemetría de shader aún no se han compilado ni instalado; la consola conserva el paquete 0.3.0.28.
+
+El siguiente build reutiliza las cachés con una huella de configuración v2. Para migrar las cachés
+anteriores sin arriesgar un árbol Mesa con opciones distintas, se conserva CPM y `build-uwp`, pero
+se limpia solo Mesa cuando `cache-matched-key` no coincide con esa huella. Con una coincidencia,
+`build-spirv-to-dxil.ps1` vuelve a ejecutar `meson setup --reconfigure` y Ninja conserva los objetos
+sin cambios. La restauración separada de `actions/cache` expone la clave coincidente; la
+documentación de build detalla la migración. Aún falta comprobar este comportamiento en una corrida
+CI real y confirmar que el tiempo de Eden sigue siendo incremental.

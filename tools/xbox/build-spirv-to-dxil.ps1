@@ -193,20 +193,29 @@ cpu = 'x86_64'
 endian = 'little'
 "@ | Set-Content -Encoding ascii $cross
 
-if ($Reconfigure -or -not (Test-Path (Join-Path $build "build.ninja"))) {
-    $setup = @("setup", $build, $src, "--cross-file", $cross,
-        "--backend=ninja", "--buildtype=release", "--wrap-mode=nodownload", "-Db_vscrt=md",
-        "-Dplatforms=windows", "-Dgallium-drivers=", "-Dvulkan-drivers=", "-Dspirv-to-dxil=true",
-        "-Dopengl=false", "-Dgles1=disabled", "-Dgles2=disabled", "-Degl=disabled",
-        "-Dglx=disabled", "-Dgbm=disabled",
-        "-Dllvm=disabled", "-Dmicrosoft-clc=disabled", "-Dmesa-clc=auto",
-        "-Dshader-cache=disabled", "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled",
-        "-Dxmlconfig=disabled", "-Dvalgrind=disabled", "-Dlibunwind=disabled",
-        "-Dbuild-tests=false", "-Dvideo-codecs=", "-Dintel-rt=disabled")
-    if (Test-Path $build) { $setup += "--wipe" }
-    & meson @setup
-    if ($LASTEXITCODE) { throw "meson setup failed" }
+$setup = @("setup", $build, $src, "--cross-file", $cross,
+    "--backend=ninja", "--buildtype=release", "--wrap-mode=nodownload", "-Db_vscrt=md",
+    "-Dplatforms=windows", "-Dgallium-drivers=", "-Dvulkan-drivers=", "-Dspirv-to-dxil=true",
+    "-Dopengl=false", "-Dgles1=disabled", "-Dgles2=disabled", "-Degl=disabled",
+    "-Dglx=disabled", "-Dgbm=disabled",
+    "-Dllvm=disabled", "-Dmicrosoft-clc=disabled", "-Dmesa-clc=auto",
+    "-Dshader-cache=disabled", "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled",
+    "-Dxmlconfig=disabled", "-Dvalgrind=disabled", "-Dlibunwind=disabled",
+    "-Dbuild-tests=false", "-Dvideo-codecs=", "-Dintel-rt=disabled")
+if (Test-Path (Join-Path $build "build.ninja")) {
+    if ($Reconfigure) {
+        $setup += "--wipe"
+    } else {
+        # Cache restore keys may select a tree made from an earlier source/config revision.
+        # Reconcile the current options but retain unchanged Ninja objects for incremental builds.
+        $setup += "--reconfigure"
+    }
+} elseif (Test-Path $build) {
+    # A partial or invalid build tree cannot be safely reconfigured.
+    $setup += "--wipe"
 }
+& meson @setup
+if ($LASTEXITCODE) { throw "meson setup failed" }
 
 # --- Build ----------------------------------------------------------------------------------
 & ninja -C $build src/microsoft/spirv_to_dxil/spirv_to_dxil.dll

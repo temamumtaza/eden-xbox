@@ -164,35 +164,30 @@ static void ApplyHeadlessBootSettings(const BootSurface& surface) {
     // Player 1 is bound to the virtual_gamepad engine (uwp_input.h) and presented to the game as
     // the controller chosen in the library (a Pro Controller unless told otherwise).
     ApplyControllerStyleSettings(LoadControllerOptions().style);
-    // Latin American Spanish (es-419, the Switch's only variant for Mexico and the US) on the
-    // American region; once the game is loaded, ApplyGameLanguage narrows it to what it ships.
-    Settings::values.language_index = Settings::Language::SpanishLatin;
+    // The guest Switch system defaults requested for Xbox: American English and US region.
+    // NS GetApplicationDesiredLanguage applies the title's own priority list if en-US is absent.
+    Settings::values.language_index = Settings::Language::EnglishAmerican;
     Settings::values.region_index = Settings::Region::Usa;
     // memory_layout_mode stays at its default until the Series-S budget is measured on-console; the
     // DRAM clamp is a separate reservation follow-up, not here.
 }
 
-/// Many games read the system language directly and fall back to English on their own when they
-/// lack it (Pokemon: Let's Go has Spain's Spanish but not es-419). Pick from the languages the
-/// game declares: Latin American Spanish, else Spain's Spanish, else American English.
-static void ApplyGameLanguage(Core::System& system) {
+/// Report the title's NACP language mask without overriding the requested en-US system language.
+/// The guest's NS language service chooses the first supported language in en-US priority order.
+static void LogGameLanguageSupport(Core::System& system) {
     FileSys::NACP nacp;
     if (system.GetAppLoader().ReadControlData(nacp) != Loader::ResultStatus::Success) {
+        LOG_WARNING(Frontend,
+                    "Headless boot: could not read game language metadata; keeping English (US)");
         return;
     }
     const u32 supported = nacp.GetSupportedLanguages();
-    const auto has = [supported](FileSys::SupportedLanguage language) {
-        return (supported & static_cast<u32>(language)) != 0;
-    };
-    // An empty mask declares nothing; keep es-419 and let the game decide.
-    const auto language =
-        supported == 0 || has(FileSys::SupportedLanguage::LatinAmericanSpanish)
-            ? Settings::Language::SpanishLatin
-        : has(FileSys::SupportedLanguage::Spanish) ? Settings::Language::Spanish
-                                                   : Settings::Language::EnglishAmerican;
-    Settings::values.language_index = language;
-    LOG_INFO(Frontend, "Headless boot: game languages {:08X}, system language {}", supported,
-             Settings::CanonicalizeEnum(language));
+    const bool supports_english_us =
+        (supported & static_cast<u32>(FileSys::SupportedLanguage::AmericanEnglish)) != 0;
+    LOG_INFO(Frontend,
+             "Headless boot: game languages {:08X}, en-US supported {}, system language {}",
+             supported, supports_english_us,
+             Settings::CanonicalizeEnum(Settings::values.language_index.GetValue()));
 }
 
 /// Optional boot.cfg next to boot.nro (written by package-appx.ps1 -RunSeconds).
@@ -482,7 +477,7 @@ int RunHeadlessBoot(const std::string& nro_path, const BootSurface& surface,
         shutdown();
         return 2;
     }
-    ApplyGameLanguage(system);
+    LogGameLanguageSupport(system);
     if (config.bug_tracker) {
         std::string title;
         void(system.GetAppLoader().ReadTitle(title));

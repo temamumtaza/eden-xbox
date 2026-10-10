@@ -31,6 +31,39 @@ free_objects(struct dxil_spirv_object *out, unsigned count)
    }
 }
 
+static void
+log_stage_failure(const struct dxil_spirv_logger *logger, const char *phase, unsigned index,
+                  dxil_spirv_shader_stage stage, size_t word_count)
+{
+   char message[192];
+   snprintf(message, sizeof(message),
+            "eden pipeline: %s failed at stage[%u] (stage=%u, SPIR-V words=%zu)", phase,
+            index, (unsigned)stage, word_count);
+   logger->log(logger->priv, message);
+}
+
+struct spirv_log_context {
+   const struct dxil_spirv_logger *logger;
+   unsigned stage_index;
+   dxil_spirv_shader_stage stage;
+};
+
+static void
+log_spirv_parse_message(void *priv, enum nir_spirv_debug_level level, size_t spirv_offset,
+                        const char *message)
+{
+   const struct spirv_log_context *context = priv;
+   if (level != NIR_SPIRV_DEBUG_LEVEL_ERROR || !context || !context->logger ||
+       !context->logger->log)
+      return;
+
+   char formatted[640];
+   snprintf(formatted, sizeof(formatted),
+            "SPIR-V parser error at stage[%u] (stage=%u, byte=%zu): %.480s",
+            context->stage_index, (unsigned)context->stage, spirv_offset, message);
+   context->logger->log(context->logger->priv, formatted);
+}
+
 /* Guest (Maxwell) shaders rely on IEEE results: rsq(0) = inf, min/max picking the non-NaN operand,
  * x * 0 staying NaN for x = inf... nir_to_dxil tags every non-exact float op with fast math
  * (DXIL_UNSAFE_ALGEBRA, "no NaN/Inf"), and the Xbox Series' shader compiler takes it: lit pixels
@@ -53,16 +86,30 @@ translate_pipeline(const struct eden_spirv_to_dxil_stage *stages, unsigned count
                    const struct dxil_spirv_logger *logger, struct dxil_spirv_object *out,
                    bool lower_integer_sampling)
 {
-   if (count == 0 || count > EDEN_SPIRV_TO_DXIL_MAX_STAGES)
+   if (count == 0 || count > EDEN_SPIRV_TO_DXIL_MAX_STAGES) {
+      char message[96];
+      snprintf(message, sizeof(message),
+               "eden pipeline: invalid stage count %u (maximum %u)", count,
+               EDEN_SPIRV_TO_DXIL_MAX_STAGES);
+      logger->log(logger->priv, message);
       return false;
+   }
    for (unsigned i = 0; i < count; ++i) {
       const dxil_spirv_shader_stage stage = stages[i].stage;
-      if (stage == DXIL_SPIRV_SHADER_NONE || stage == DXIL_SPIRV_SHADER_KERNEL)
+      if (stage == DXIL_SPIRV_SHADER_NONE || stage == DXIL_SPIRV_SHADER_KERNEL) {
+         log_stage_failure(logger, "invalid shader stage", i, stage, stages[i].word_count);
          return false;
-      if (stage == DXIL_SPIRV_SHADER_COMPUTE && count != 1)
+      }
+      if (stage == DXIL_SPIRV_SHADER_COMPUTE && count != 1) {
+         log_stage_failure(logger, "compute stage must be the only stage", i, stage,
+                           stages[i].word_count);
          return false;
-      if (i > 0 && stage <= stages[i - 1].stage)
+      }
+      if (i > 0 && stage <= stages[i - 1].stage) {
+         log_stage_failure(logger, "stages are not in strictly increasing order", i, stage,
+                           stages[i].word_count);
          return false;
+      }
    }
    memset(out, 0, sizeof(*out) * count);
 
@@ -71,7 +118,12 @@ translate_pipeline(const struct eden_spirv_to_dxil_stage *stages, unsigned count
    /* Each shader keeps a pointer to its compiler options until it is freed. */
    nir_shader_compiler_options nir_options[EDEN_SPIRV_TO_DXIL_MAX_STAGES];
    nir_shader *nir[EDEN_SPIRV_TO_DXIL_MAX_STAGES] = {0};
-   const struct spirv_to_nir_options *spirv_opts = dxil_spirv_nir_get_spirv_options();
+   struct spirv_log_context spirv_log = {.logger = logger};
+   struct spirv_to_nir_options spirv_options = *dxil_spirv_nir_get_spirv_options();
+   spirv_options.debug.func = log_spirv_parse_message;
+   spirv_options.debug.private_data = &spirv_log;
+   // Parse failures use the normal pipeline error path, even in Mesa debug builds.
+   spirv_options.skip_os_break_in_debug_build = true;
    const unsigned supported_bit_sizes = 16 | 32 | 64;
    bool success = true;
 
@@ -82,10 +134,14 @@ translate_pipeline(const struct eden_spirv_to_dxil_stage *stages, unsigned count
       nir_options[i].lower_base_vertex =
          conf->first_vertex_and_base_instance_mode != DXIL_SPIRV_SYSVAL_TYPE_ZERO;
 
+      spirv_log.stage_index = i;
+      spirv_log.stage = stages[i].stage;
       nir[i] = spirv_to_nir(stages[i].words, stages[i].word_count, NULL,
                             (mesa_shader_stage)stages[i].stage, stages[i].entry_point,
-                            spirv_opts, &nir_options[i]);
+                            &spirv_options, &nir_options[i]);
       if (!nir[i]) {
+         log_stage_failure(logger, "SPIR-V to NIR parsing", i, stages[i].stage,
+                           stages[i].word_count);
          success = false;
          break;
       }
@@ -128,6 +184,8 @@ translate_pipeline(const struct eden_spirv_to_dxil_stage *stages, unsigned count
       };
       struct blob dxil_blob;
       if (!nir_to_dxil(nir[i], &opts, &logger_inner, &dxil_blob)) {
+         log_stage_failure(logger, "NIR to DXIL emission", i, stages[i].stage,
+                           stages[i].word_count);
          if (dxil_blob.allocated)
             blob_finish(&dxil_blob);
          success = false;

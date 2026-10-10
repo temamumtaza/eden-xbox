@@ -6,7 +6,23 @@ This branch builds the current Eden UWP frontend and its native Direct3D 12 rend
 
 Use GitHub Actions; no local Windows installation or VM is needed. Open Actions in the personal fork, choose Build Eden Xbox, and run it on the xbox branch. Leave Source ref blank for the current branch tip, or provide a commit SHA from this fork to reproduce or roll back source. The workflow downloads dependencies, configures the UWP toolchain, builds Eden and Mesa's SPIR-V-to-DXIL runtime, signs and validates the APPX, and publishes a 30-day install artifact.
 
+The workflow caches CPM dependencies, the UWP Ninja tree, and Mesa's build tree. It first restores
+a cache with the same configuration fingerprint, then falls back to the older SDK 26100 cache
+format. When that legacy cache is selected, the workflow preserves CPM and the UWP tree but wipes
+Mesa's build tree once because its configuration cannot be verified. On a matching v2 cache,
+CMake and Meson reconfigure their existing trees and Ninja rebuilds changed files, including the
+linked shader wrapper. The restore action exposes the matched cache key for this check ([restore
+outputs](https://github.com/actions/cache/blob/v6.1.0/restore/action.yml)). Use `clean_build` only
+when you need a clean configuration; it skips the caches and configures Mesa from scratch. Meson
+documents the difference between [reconfiguring and wiping a build directory](https://mesonbuild.com/Configuring-a-build-directory.html).
+
 The short install steps are in [README-macos.md](../../README-macos.md); signing, cache, rollback, and scheduled upstream maintenance are in [ci_macos_maintenance.md](ci_macos_maintenance.md).
+
+## Capture one D3D12 guest shader
+
+The `workflow_dispatch` input `dump_shader_hash` accepts one 16-digit VS or PS hash from a D3D12 pipeline log. When reusing a successful unsigned build, set `unsigned_run_id` to that build and set `package_version_override` to a version newer than the Xbox's installed package; the package job then reuses the executable and translator without running the native build. It adds `dump_shader=<hash>` to the packaged `boot.cfg`, and the package metadata records the selected hash. Leaving the input blank preserves the normal package.
+
+When Eden builds a pipeline containing that shader, it writes `shader_<hash>_<stage>.ir.txt` and `shader_<hash>_<stage>.spv` under `LocalState/eden/log`. Capture one hash per run; use the guest shader hash shown after `VS` or `PS`, not the D3D12 pipeline key. These files contain shader code derived from the selected title; keep them private and out of source control. The standard `eden-xbox-macos.py logs` command collects the regular log files; use `tools/xbox/download-shader-dump.py --portal https://<xbox-ip>:11443 --shader-hash <16-hex-hash>` to fetch the matching IR/SPIR-V files over the same pinned TLS connection. The downloader checks all five possible stage suffixes and writes only into a private local Downloads subfolder.
 
 ## Windows toolchain used by CI
 

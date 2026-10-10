@@ -2481,3 +2481,19 @@ El perfil descarta los callbacks de lectura como explicacion unica del retraso y
 costes importantes de emision/proteccion. SamplerHeap evita construir claves en hits;
 el candidato CPU mantiene W^X e invalidaciones. Build y regresion hash correctos,
 gate gameplay del candidato, A/B y Series pendientes; no afirmar 60 FPS sostenidos.
+
+### Diagnóstico de errores SPIR-V
+
+El wrapper enlazado clona las opciones base que devuelve `dxil_spirv_nir_get_spirv_options()` y
+conecta el callback `debug.func` por llamada. El contexto conserva la etapa actual y entrega al
+logger solo mensajes de nivel `ERROR`, con el offset en bytes del módulo SPIR-V. Las opciones
+viven hasta liberar las etapas NIR; no se comparte estado mutable entre compilaciones paralelas.
+`skip_os_break_in_debug_build` evita que un shader de entrada inválido interrumpa el proceso en
+builds Mesa debug: el parse falla normalmente y el pipeline D3D12 deja el draw omitido, igual que
+su manejo actual de errores. No se toca la traducción de shaders válidos.
+
+La API y el flujo se comprobaron contra [Mesa 26.2.3, `nir_spirv.h`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.2.3/src/compiler/spirv/nir_spirv.h)
+y [`spirv_to_nir.c`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.2.3/src/compiler/spirv/spirv_to_nir.c).
+`build-spirv-to-dxil.ps1` copia `tools/xbox/mesa/eden_pipeline.c` al árbol Mesa; la DLL debe
+recompilarse antes de que el próximo log incluya el diagnóstico. La sesión Z-A y las hipótesis
+separadas están en [xbox_internal.md](xbox_internal.md#prueba-z-a-y-selección-de-idioma-del-sistema).

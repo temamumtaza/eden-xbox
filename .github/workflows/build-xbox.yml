@@ -32,6 +32,10 @@ on:
         description: Package-only experimental PE stack reserve override (only 16 MiB is currently supported)
         required: false
         type: string
+      dump_shader_hash:
+        description: Optional 16-digit guest shader hash to dump as Eden IR and SPIR-V when it is translated
+        required: false
+        type: string
       clean_build:
         description: Skip caches and configure Mesa from scratch
         required: false
@@ -90,15 +94,18 @@ jobs:
       - name: Cache CPM, Mesa, and incremental Ninja trees
         id: cache
         if: ${{ !inputs.clean_build }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .cache/cpm
             build-uwp
             ${{ runner.temp }}\mesa-build
-          key: ${{ runner.os }}-uwp26100-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-${{ github.sha }}
+          key: ${{ runner.os }}-uwp26100-v2-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1') }}-${{ hashFiles('tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-${{ github.sha }}
+          # Prefer a tree with the same toolchain/configuration; the legacy prefix is migrated
+          # conservatively by wiping only Mesa's build tree when its matched key is inspected.
           restore-keys: |
-            ${{ runner.os }}-uwp26100-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1', 'tools/xbox/mesa/**', 'externals/spirv-to-dxil/include/**') }}-
+            ${{ runner.os }}-uwp26100-v2-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1') }}-
+            ${{ runner.os }}-uwp26100-
 
       - name: Ensure Visual Studio v143 UWP tools and SDK 26100
         shell: pwsh
@@ -216,10 +223,24 @@ jobs:
 
       - name: Build SPIR-V to DXIL Store-CRT runtime
         shell: pwsh
+        env:
+          MESA_CACHE_CONFIG_PREFIX: ${{ runner.os }}-uwp26100-v2-${{ hashFiles('cpmfile.json', 'CMakePresets.json', 'tools/xbox/build-spirv-to-dxil.ps1') }}-
+          MESA_CACHE_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
         run: |
           $ErrorActionPreference = 'Stop'
           $mesaDir = Join-Path $env:RUNNER_TEMP 'mesa-build'
-          & .\tools\xbox\build-spirv-to-dxil.ps1 -WorkDir $mesaDir
+          $mesaArgs = @('-WorkDir', $mesaDir)
+          $matchedKey = $env:MESA_CACHE_MATCHED_KEY
+          $configurationMatches = $false
+          if (-not [string]::IsNullOrWhiteSpace($matchedKey)) {
+            $configurationMatches = $matchedKey.StartsWith(
+              $env:MESA_CACHE_CONFIG_PREFIX, [System.StringComparison]::Ordinal)
+          }
+          if (-not $configurationMatches) {
+            Write-Host 'Mesa cache has no matching configuration fingerprint; rebuilding Mesa build files.'
+            $mesaArgs += '-Reconfigure'
+          }
+          & .\tools\xbox\build-spirv-to-dxil.ps1 @mesaArgs
           if ($LASTEXITCODE -ne 0) { throw 'Mesa spirv_to_dxil build failed.' }
           $dll = Join-Path $mesaDir 'build-uwp\src\microsoft\spirv_to_dxil\spirv_to_dxil.dll'
           if (-not (Test-Path $dll)) { throw 'Mesa translator DLL was not produced.' }
@@ -238,6 +259,16 @@ jobs:
       - name: Build eden-uwp
         shell: cmd
         run: tools\xbox\build-env.bat cmake --build --preset uwp-x64 --target eden-uwp
+
+      - name: Save CPM, Mesa, and incremental Ninja trees
+        if: ${{ success() && !inputs.clean_build && steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/cpm
+            build-uwp
+            ${{ runner.temp }}\mesa-build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       - name: Assemble unsigned, allowlisted build payload
         id: payload
@@ -503,13 +534,35 @@ jobs:
           PACKAGE_VERSION: ${{ steps.package_source.outputs.package_version }}
           SOURCE_SHA: ${{ steps.package_source.outputs.source_sha }}
           PACKAGE_SOURCE_SHA: ${{ steps.package_source.outputs.package_source_sha }}
+          DUMP_SHADER_HASH: ${{ inputs.dump_shader_hash }}
         run: |
           $ErrorActionPreference = 'Stop'
           $env:EDEN_WINDOWS_SDK_VERSION = '10.0.26100.0'
           $mesaRoot = Join-Path $env:RUNNER_TEMP 'eden-xbox-payload'
           $translator = Join-Path $mesaRoot 'build-uwp\bin\spirv_to_dxil.dll'
           if (-not (Test-Path $translator)) { throw 'The Mesa shader translator is missing from the downloaded unsigned payload.' }
-          & .\tools\xbox\package-appx.ps1 -BuildDir (Join-Path $mesaRoot 'build-uwp') -SpirvToDxil (Join-Path $mesaRoot 'build-uwp\bin\spirv_to_dxil.dll') -OutDir build-uwp\package -Library -PackageVersion $env:PACKAGE_VERSION -SigningCertificateThumbprint $env:SIGNING_THUMBPRINT -VCLibsPackage (Join-Path $env:RUNNER_TEMP 'eden-xbox-payload\Microsoft.VCLibs.x64.14.00.appx') -RequireRuntimeFiles
+          $dumpShaderHash = ''
+          if (-not [string]::IsNullOrWhiteSpace($env:DUMP_SHADER_HASH)) {
+            $dumpShaderHash = $env:DUMP_SHADER_HASH.Trim()
+          }
+          if ($dumpShaderHash -and $dumpShaderHash -notmatch '^[0-9a-fA-F]{16}$') {
+            throw 'dump_shader_hash must be exactly 16 hexadecimal digits.'
+          }
+          $packageArgs = @(
+            '-BuildDir', (Join-Path $mesaRoot 'build-uwp'),
+            '-SpirvToDxil', $translator,
+            '-OutDir', 'build-uwp\package',
+            '-Library',
+            '-PackageVersion', $env:PACKAGE_VERSION,
+            '-SigningCertificateThumbprint', $env:SIGNING_THUMBPRINT,
+            '-VCLibsPackage', (Join-Path $env:RUNNER_TEMP 'eden-xbox-payload\Microsoft.VCLibs.x64.14.00.appx'),
+            '-RequireRuntimeFiles'
+          )
+          if ($dumpShaderHash) {
+            $packageArgs += @('-BootCfg', "dump_shader=$dumpShaderHash")
+            Write-Host "Packaging one-shader IR/SPIR-V capture for hash $dumpShaderHash."
+          }
+          & .\tools\xbox\package-appx.ps1 @packageArgs
           if ($LASTEXITCODE -ne 0) { throw 'Strict APPX packaging/signing failed.' }
 
       - name: Validate APPX structure, manifest, signature, dependency, and runtime DLLs
@@ -522,11 +575,30 @@ jobs:
           PACKAGE_VERSION: ${{ steps.package_source.outputs.package_version }}
           SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
           STACK_RESERVE_OVERRIDE: ${{ steps.stack_probe.outputs.reserve_mib }}
+          DUMP_SHADER_HASH: ${{ inputs.dump_shader_hash }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $diagnosticDumpHash = ''
+          if (-not [string]::IsNullOrWhiteSpace($env:DUMP_SHADER_HASH)) {
+            $diagnosticDumpHash = $env:DUMP_SHADER_HASH.Trim().ToLowerInvariant()
+          }
           $script = '.\tools\xbox\validate-appx.ps1'
           & $script -Package 'build-uwp\package\eden-xbox.appx' -Certificate 'build-uwp\package\eden-xbox.cer' -VCLibs 'build-uwp\package\Microsoft.VCLibs.x64.14.00.appx' -SdkVersion '10.0.26100.0' -ExpectedPublisher 'CN=EdenXboxDev' -ExpectedVersion $env:PACKAGE_VERSION
           if ($LASTEXITCODE -ne 0) { throw 'APPX validation failed.' }
+          if ($diagnosticDumpHash) {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [IO.Compression.ZipFile]::OpenRead('build-uwp\package\eden-xbox.appx')
+            try {
+              $entry = $archive.Entries | Where-Object { $_.FullName -ieq 'boot.cfg' } | Select-Object -First 1
+              if (-not $entry) { throw 'Diagnostic package has no root boot.cfg.' }
+              $reader = [IO.StreamReader]::new($entry.Open())
+              try { $bootLines = $reader.ReadToEnd() -split '\r?\n' } finally { $reader.Dispose() }
+              if ($bootLines -notcontains "dump_shader=$diagnosticDumpHash") {
+                throw 'The signed APPX boot.cfg does not contain the selected shader hash.'
+              }
+            } finally { $archive.Dispose() }
+            Write-Host "Verified boot.cfg requests shader dump $diagnosticDumpHash."
+          }
           $out = 'build-uwp\package'
           $stackReserveOverride = $null
           if (-not [string]::IsNullOrWhiteSpace($env:STACK_RESERVE_OVERRIDE)) {
@@ -543,6 +615,7 @@ jobs:
             package_workflow_run_number = [long]$env:GITHUB_RUN_NUMBER
             package_workflow_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             package_version = $env:PACKAGE_VERSION
+            diagnostic_shader_dump_hash = $diagnosticDumpHash
             post_link_stack_reserve_mib = $stackReserveOverride
             windows_runner = $env:ImageOS + ' ' + $env:ImageVersion
             windows_sdk = '10.0.26100.0'
