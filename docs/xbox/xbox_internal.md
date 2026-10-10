@@ -2734,14 +2734,16 @@ en el binario instalado: los workflows de paquete-only #27, #28, #30 y #31 reuti
 compilado en `790cda`. Para conocer la etapa y el mensaje exacto de Mesa hace falta compilar la
 revisión actual; el artefacto existente no puede responderlo.
 
-El build diagnóstico #32 (`38079742266`) falló dos veces antes de configurar UWP: el runner
-Windows recibió HTTP 404 al descargar `mesa-26.2.3.tar.xz` desde el archivo de Mesa. No se
-compilaron Mesa ni Eden y no se generó un paquete nuevo. Desde macOS, el mirror
-`sources.voidlinux.org` entregó los 68 561 540 bytes con SHA-256
-`1628058a8d2c0615975de5a15ab7bbb9638c50000b5bed9456ff423ea034a81f`, igual al checksum de la
-publicación oficial de Mesa. `build-spirv-to-dxil.ps1` ahora comprueba el archivo cacheado, elimina
-archivos parciales o con hash incorrecto, y prueba el archivo oficial seguido de ese mirror;
-ambas descargas deben coincidir con el checksum fijado. Falta validar el cambio en Actions y
-obtener el paquete con la telemetría Mesa.
+El build diagnóstico #32 (`38079742266`) y su repetición fallaron antes de configurar UWP; el
+build #33 (`38080175708`) volvió a fallar en la misma preparación. El log de #33 muestra que la
+URL se construyó como `mesa-D:\a\_temp\mesa-build.tar.xz`: el workflow pasaba `-WorkDir` y su
+valor como elementos de un array de strings, y PowerShell terminó usando la ruta como versión de
+Mesa. Por tanto, los 404 no demostraban que el archivo oficial o el mirror estuvieran caídos. El
+workflow ahora usa splatting de parámetros con nombre mediante una tabla. La descarga sigue
+verificando SHA-256 para el tarball cacheado, el archivo oficial y el fallback
+`sources.voidlinux.org`; este mirror entregó localmente los 68 561 540 bytes con el mismo hash
+fijado en las notas oficiales. Ninguno de esos intentos llegó a compilar Mesa o Eden ni produjo un
+paquete. Falta validar el arreglo de argumentos en Actions y obtener el paquete con la telemetría
+Mesa.
 Fuentes: [checksum oficial Mesa 26.2.3](https://docs.mesa3d.org/relnotes/26.2.3.html) y
 [mirror del archivo de Mesa 26.2.3](https://sources.voidlinux.org/mesa-26.2.3/mesa-26.2.3.tar.xz).

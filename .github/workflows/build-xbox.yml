@@ -229,7 +229,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $mesaDir = Join-Path $env:RUNNER_TEMP 'mesa-build'
-          $mesaArgs = @('-WorkDir', $mesaDir)
+          $mesaArgs = @{ WorkDir = $mesaDir }
           $matchedKey = $env:MESA_CACHE_MATCHED_KEY
           $configurationMatches = $false
           if (-not [string]::IsNullOrWhiteSpace($matchedKey)) {
@@ -238,7 +238,7 @@ jobs:
           }
           if (-not $configurationMatches) {
             Write-Host 'Mesa cache has no matching configuration fingerprint; rebuilding Mesa build files.'
-            $mesaArgs += '-Reconfigure'
+            $mesaArgs['Reconfigure'] = $true
           }
           & .\tools\xbox\build-spirv-to-dxil.ps1 @mesaArgs
           if ($LASTEXITCODE -ne 0) { throw 'Mesa spirv_to_dxil build failed.' }
