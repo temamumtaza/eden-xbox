@@ -548,18 +548,18 @@ jobs:
           if ($dumpShaderHash -and $dumpShaderHash -notmatch '^[0-9a-fA-F]{16}$') {
             throw 'dump_shader_hash must be exactly 16 hexadecimal digits.'
           }
-          $packageArgs = @(
-            '-BuildDir', (Join-Path $mesaRoot 'build-uwp'),
-            '-SpirvToDxil', $translator,
-            '-OutDir', 'build-uwp\package',
-            '-Library',
-            '-PackageVersion', $env:PACKAGE_VERSION,
-            '-SigningCertificateThumbprint', $env:SIGNING_THUMBPRINT,
-            '-VCLibsPackage', (Join-Path $env:RUNNER_TEMP 'eden-xbox-payload\Microsoft.VCLibs.x64.14.00.appx'),
-            '-RequireRuntimeFiles'
-          )
+          $packageArgs = @{
+            BuildDir = Join-Path $mesaRoot 'build-uwp'
+            SpirvToDxil = $translator
+            OutDir = 'build-uwp\package'
+            Library = $true
+            PackageVersion = $env:PACKAGE_VERSION
+            SigningCertificateThumbprint = $env:SIGNING_THUMBPRINT
+            VCLibsPackage = Join-Path $env:RUNNER_TEMP 'eden-xbox-payload\Microsoft.VCLibs.x64.14.00.appx'
+            RequireRuntimeFiles = $true
+          }
           if ($dumpShaderHash) {
-            $packageArgs += @('-BootCfg', "dump_shader=$dumpShaderHash")
+            $packageArgs.BootCfg = @("dump_shader=$dumpShaderHash")
             Write-Host "Packaging one-shader IR/SPIR-V capture for hash $dumpShaderHash."
           }
           & .\tools\xbox\package-appx.ps1 @packageArgs
