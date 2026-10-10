@@ -2804,8 +2804,18 @@ instrucciones y recibe `BuiltIn Layer`. Un recorrido local de límites de instru
 truncamientos; no equivale a `spirv-val` ni prueba que Mesa traduzca o que el PSO sea válido. Los dumps
 permanecen fuera del repositorio.
 
+La fuente fijada de Mesa 26.2.3 confirma que `vtn_variables.c` solo acepta
+`ShaderViewportIndexLayerEXT` al validar `Layer`/`ViewportIndex` desde Vertex/Tessellation/Mesh. Un
+commit posterior de Mesa, `8fce8eee280f2592c653f7c541c65c6d6c97598c`, corrige exactamente el mensaje
+`invalid stage for SpvBuiltInLayer` al aceptar también las capabilities core `ShaderLayer` y
+`ShaderViewportIndex` y las de Mesh. El paquete `.37` ya incluye el override de
+`ShaderViewportIndexLayerEXT` en el wrapper, pero Z-A no se ha repetido desde ese cambio; por eso no
+backportar aún la revisión mayor de capabilities. Si la misma falla reaparece con `.37/.38`, aplicar
+el parche upstream exacto en el builder de Mesa y comprobar que el shader produce DXIL y PSO.
+
 Fuentes: [SPIR-V EXT_shader_viewport_index_layer](https://github.khronos.org/SPIRV-Registry/extensions/EXT/SPV_EXT_shader_viewport_index_layer.html),
 [Mesa `vtn_variables.c`](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/%2B/5ec01259be367766c2bd1aad4fcef49e79c4c574/src/compiler/spirv/vtn_variables.c),
+[fix upstream Mesa de capabilities Layer/ViewportIndex](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/%2B/8fce8eee280f2592c653f7c541c65c6d6c97598c%5E%21/),
 [Mesa DXIL signature mapping](https://fossies.org/dox/mesa-26.1.8/dxil__signature_8c_source.html) y
 [Microsoft HLSL semantics](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics).
 
