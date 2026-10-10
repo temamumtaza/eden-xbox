@@ -441,8 +441,7 @@ int RunHeadlessBoot(const std::string& nro_path, const BootSurface& surface,
         .applet_id = Service::AM::AppletId::Application,
     };
     Core::SystemResultStatus load_result{};
-    WriteDiag("step: system.Load() entering on host thread " +
-              std::to_string(GetCurrentThreadId()) + " | " + MemoryReport());
+    WriteDiag("step: system.Load() entering | " + MemoryReport());
     try {
         load_result = system.Load(emu_window, nro_path, load_parameters);
     } catch (const std::bad_alloc&) {
