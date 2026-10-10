@@ -25,6 +25,7 @@
 #include <fstream>
 #include <mutex>
 #include <cstring>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -140,6 +141,8 @@ constexpr const char* JIT_LIVENESS_SENTINEL = "EDEN_XBOX_JIT_ALIVE";
 constexpr const char* GFX_DONE_SENTINEL = "EDEN_XBOX_GFX_DONE";
 /// RunHeadlessBoot's status when the player chose "back to the library" in the in-game menu.
 constexpr int RETURN_TO_LIBRARY = 10;
+/// Load ran out of host memory; the caller should return to the library with a targeted hint.
+constexpr int LOAD_OUT_OF_MEMORY = 16;
 
 /// Where the renderer presents: the CoreWindow (as IUnknown*) and its size in physical pixels.
 /// A null window selects the Null renderer.
@@ -442,7 +445,32 @@ int RunHeadlessBoot(const std::string& nro_path, const BootSurface& surface,
     Service::AM::FrontendAppletParameters load_parameters{
         .applet_id = Service::AM::AppletId::Application,
     };
-    const Core::SystemResultStatus load_result = system.Load(emu_window, nro_path, load_parameters);
+    Core::SystemResultStatus load_result{};
+    WriteDiag("step: system.Load() entering on host thread " +
+              std::to_string(GetCurrentThreadId()) + " | " + MemoryReport());
+    try {
+        load_result = system.Load(emu_window, nro_path, load_parameters);
+    } catch (const std::bad_alloc&) {
+        // A failed Load can leave kernel objects behind. Recover through the same explicit
+        // shutdown used for a returned error instead of letting Core::System tear them down.
+        try {
+            WriteDiag("step: system.Load() threw std::bad_alloc");
+        } catch (...) {
+        }
+        shutdown();
+        try {
+            WriteDiag("step: system.Load() allocation failure | " + MemoryReport());
+        } catch (...) {
+        }
+        return LOAD_OUT_OF_MEMORY;
+    } catch (const std::exception& e) {
+        try {
+            WriteDiag(std::string("step: system.Load() threw std::exception: ") + e.what());
+        } catch (...) {
+        }
+        shutdown();
+        return 2;
+    }
     WriteDiag("step: system.Load() returned status " +
               std::to_string(static_cast<int>(load_result)) + " | " + MemoryReport());
     WriteDiag("memory map: " + LargestAllocations());
@@ -853,7 +881,9 @@ std::string MemoryReport() {
         const auto report = MemoryManager::GetAppMemoryReport();
         const std::string stats = Common::HostMemoryCommitStats();
         return "app memory " + std::to_string(MemoryManager::AppMemoryUsage() >> 20) + " MiB of " +
-               std::to_string(MemoryManager::AppMemoryUsageLimit() >> 20) + " MiB limit, commit " +
+               std::to_string(MemoryManager::AppMemoryUsageLimit() >> 20) +
+               " MiB current limit, expected cap " +
+               std::to_string(MemoryManager::ExpectedAppMemoryUsageLimit() >> 20) + " MiB, commit " +
                std::to_string(report.TotalCommitUsage() >> 20) + " of " +
                std::to_string(report.TotalCommitLimit() >> 20) + " MiB" +
                (g_test_memory_limit.load() == 0 ? "" : ", PC test budget " +
@@ -1345,6 +1375,24 @@ void DescribeAddress(std::uintptr_t addr, char* out, std::size_t out_size) {
                        : mbi.Type == MEM_MAPPED ? "mapped"
                        : mbi.Type == MEM_IMAGE  ? "image"
                                                 : "-";
+    if (mbi.Type == MEM_IMAGE && mbi.AllocationBase != nullptr) {
+        HMODULE module = nullptr;
+        char module_path[MAX_PATH] = "";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(addr), &module) &&
+            GetModuleFileNameA(module, module_path, MAX_PATH) != 0) {
+            const char* name = std::strrchr(module_path, '\\');
+            std::snprintf(out, out_size, "%s+0x%llx [commit image %s, alloc base 0x%llx]",
+                          name ? name + 1 : module_path,
+                          static_cast<unsigned long long>(addr -
+                              reinterpret_cast<std::uintptr_t>(module)),
+                          ProtectName(mbi.Protect),
+                          static_cast<unsigned long long>(
+                              reinterpret_cast<std::uintptr_t>(mbi.AllocationBase)));
+            return;
+        }
+    }
     std::snprintf(out, out_size, "0x%llx [%s %s %s, alloc base 0x%llx]",
                   static_cast<unsigned long long>(addr), state, type,
                   mbi.State == MEM_COMMIT ? ProtectName(mbi.Protect) : "-",
@@ -1440,6 +1488,44 @@ LONG NTAPI FirstChanceLogger(EXCEPTION_POINTERS* ep) {
                       static_cast<unsigned long long>(rec->ExceptionInformation[2]),
                       ProtectName(static_cast<DWORD>(rec->ExceptionInformation[3])),
                       GetCurrentThreadId());
+    } else if (rec->ExceptionCode == 0xc00000fd && ep->ContextRecord != nullptr) {
+#if defined(_M_X64) || defined(__x86_64__)
+        ULONG_PTR low{};
+        ULONG_PTR high{};
+        GetCurrentThreadStackLimits(&low, &high);
+        const auto rsp = static_cast<std::uintptr_t>(ep->ContextRecord->Rsp);
+        const auto span = high > low ? high - low : 0;
+        const bool rsp_in_limits = rsp >= low && rsp <= high;
+        const auto used = rsp_in_limits ? high - rsp : 0;
+        const auto remaining = rsp_in_limits ? rsp - low : 0;
+        const auto param0 = static_cast<unsigned long long>(
+            rec->NumberParameters > 0 ? rec->ExceptionInformation[0] : 0);
+        const auto param1 = static_cast<unsigned long long>(
+            rec->NumberParameters > 1 ? rec->ExceptionInformation[1] : 0);
+        std::snprintf(line, sizeof(line),
+                      "[eden-uwp] [+%llums] FIRST-CHANCE exception 0x%08lx | at %s | "
+                      "params %lu [0x%llx 0x%llx] | RSP 0x%llx, thread stack [0x%llx, 0x%llx) "
+                      "span %llu KiB, used %llu KiB, distance to low %llu KiB, in range %s | "
+                      "thread %lu\n",
+                      ElapsedMs(), static_cast<unsigned long>(rec->ExceptionCode), at,
+                      static_cast<unsigned long>(rec->NumberParameters),
+                      param0, param1, static_cast<unsigned long long>(rsp),
+                      static_cast<unsigned long long>(low),
+                      static_cast<unsigned long long>(high),
+                      static_cast<unsigned long long>(span / 1024),
+                      static_cast<unsigned long long>(used / 1024),
+                      static_cast<unsigned long long>(remaining / 1024),
+                      rsp_in_limits ? "yes" : "no", GetCurrentThreadId());
+#else
+        std::snprintf(line, sizeof(line),
+                      "[eden-uwp] [+%llums] FIRST-CHANCE exception 0x%08lx | at %s | params %lu "
+                      "[0x%llx 0x%llx] | thread %lu\n",
+                      ElapsedMs(), static_cast<unsigned long>(rec->ExceptionCode), at,
+                      static_cast<unsigned long>(rec->NumberParameters),
+                      static_cast<unsigned long long>(rec->NumberParameters > 0 ? rec->ExceptionInformation[0] : 0),
+                      static_cast<unsigned long long>(rec->NumberParameters > 1 ? rec->ExceptionInformation[1] : 0),
+                      GetCurrentThreadId());
+#endif
     } else {
         std::snprintf(line, sizeof(line),
                       "[eden-uwp] [+%llums] FIRST-CHANCE exception 0x%08lx | at %s | params %lu "
@@ -1944,6 +2030,12 @@ struct BootView : implements<BootView, IFrameworkViewSource, IFrameworkView> {
             if (show_library && boot_status.load() == 2) {
                 library_error = "No se pudo cargar el juego. Comprueba el USB, los permisos y los datos del juego.";
                 WriteDiag("boot load failed; returning to library for recovery");
+                continue;
+            }
+            if (show_library && boot_status.load() == EdenXbox::LOAD_OUT_OF_MEMORY) {
+                library_error = "No hay memoria suficiente para cargar. En Dev Home, cambia Eden a tipo Game "
+                                "y vuelve a intentarlo.";
+                WriteDiag("boot load ran out of memory; returning to library for recovery");
                 continue;
             }
             if (show_library && boot_status.load() == 15) {

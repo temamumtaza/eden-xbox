@@ -56,6 +56,10 @@ if (MSVC)
     target_compile_options(eden-uwp PRIVATE /EHsc)
     # AppContainer executable: required for a sideloadable UWP package.
     target_link_options(eden-uwp PRIVATE /APPCONTAINER)
+    # The default x64 thread stack reserve is 1 MiB. A large title hit STATUS_STACK_OVERFLOW while
+    # system.Load() was still running on Xbox; reserve 16 MiB for threads using the executable
+    # default. The extra address space is reserved, not committed.
+    target_link_options(eden-uwp PRIVATE /STACK:16777216)
     # CRT bridge for the two bundled prebuilt deps that are /MT and have NO from-source path on Windows:
     # ffmpeg (Eden disables YUZU_USE_EXTERNAL_FFMPEG on WIN32) and SDL3. They inject /DEFAULTLIB:LIBCMT,
     # which the /MD Store-CRT app can't satisfy; ignoring it forces their CRT symbols onto the app's

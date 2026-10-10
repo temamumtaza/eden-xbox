@@ -28,6 +28,10 @@ on:
         description: New package-only version, greater than the selected unsigned artifact (for example 0.3.0.19)
         required: false
         type: string
+      stack_reserve_mib:
+        description: Package-only experimental PE stack reserve override (only 16 MiB is currently supported)
+        required: false
+        type: string
       clean_build:
         description: Skip caches and configure Mesa from scratch
         required: false
@@ -360,6 +364,44 @@ jobs:
           run-id: ${{ inputs.unsigned_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Apply package-only 16 MiB thread-stack reserve probe
+        id: stack_probe
+        if: ${{ inputs.stack_reserve_mib != '' }}
+        shell: pwsh
+        env:
+          UNSIGNED_RUN_ID: ${{ inputs.unsigned_run_id }}
+          STACK_RESERVE_MIB: ${{ inputs.stack_reserve_mib }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:UNSIGNED_RUN_ID)) {
+            throw 'The stack-reserve probe requires an existing unsigned artifact; it never triggers a native rebuild.'
+          }
+          if ($env:STACK_RESERVE_MIB -ne '16') { throw 'Only stack_reserve_mib=16 is supported.' }
+          $exe = Join-Path $env:RUNNER_TEMP 'eden-xbox-payload\build-uwp\bin\eden-uwp.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'The selected unsigned payload has no eden-uwp.exe.' }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsRoot) { throw 'Visual Studio x64 tools are required for the package-only stack probe.' }
+          $toolset = Get-ChildItem (Join-Path $vsRoot 'VC\Tools\MSVC') -Directory |
+            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          if (-not $toolset) { throw 'The Visual Studio MSVC toolset directory is missing.' }
+          $editbin = Join-Path $toolset.FullName 'bin\Hostx64\x64\editbin.exe'
+          if (-not (Test-Path -LiteralPath $editbin)) { throw 'editbin.exe is missing from the x64 MSVC toolset.' }
+          $reserveBytes = [long]$env:STACK_RESERVE_MIB * 1MB
+          & $editbin "/STACK:$reserveBytes" $exe
+          if ($LASTEXITCODE -ne 0) { throw "editbin failed to set the stack reserve ($LASTEXITCODE)." }
+          $image = [IO.File]::ReadAllBytes($exe)
+          $peOffset = [BitConverter]::ToInt32($image, 0x3c)
+          if ([Text.Encoding]::ASCII.GetString($image, $peOffset, 4) -ne "PE`0`0") { throw 'Patched executable has no valid PE signature.' }
+          $optionalHeader = $peOffset + 4 + 20
+          if ([BitConverter]::ToUInt16($image, $optionalHeader) -ne 0x20b) { throw 'Patched executable is not PE32+.' }
+          $actualReserve = [BitConverter]::ToUInt64($image, $optionalHeader + 72)
+          if ($actualReserve -ne [uint64]$reserveBytes) { throw "Stack-reserve verification failed: expected $reserveBytes, found $actualReserve." }
+          $actualCommit = [BitConverter]::ToUInt64($image, $optionalHeader + 80)
+          "reserve_mib=$env:STACK_RESERVE_MIB" >> $env:GITHUB_OUTPUT
+          Write-Host "Verified PE SizeOfStackReserve=$actualReserve bytes; SizeOfStackCommit=$actualCommit bytes."
+          Write-Host "Patched eden-uwp.exe SHA-256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant())"
+
       - name: Resolve package source metadata
         id: package_source
         shell: pwsh
@@ -479,12 +521,17 @@ jobs:
           SOURCE_RUN_NUMBER: ${{ steps.package_source.outputs.source_run_number }}
           PACKAGE_VERSION: ${{ steps.package_source.outputs.package_version }}
           SIGNING_THUMBPRINT: ${{ secrets.XBOX_SIGNING_THUMBPRINT }}
+          STACK_RESERVE_OVERRIDE: ${{ steps.stack_probe.outputs.reserve_mib }}
         run: |
           $ErrorActionPreference = 'Stop'
           $script = '.\tools\xbox\validate-appx.ps1'
           & $script -Package 'build-uwp\package\eden-xbox.appx' -Certificate 'build-uwp\package\eden-xbox.cer' -VCLibs 'build-uwp\package\Microsoft.VCLibs.x64.14.00.appx' -SdkVersion '10.0.26100.0' -ExpectedPublisher 'CN=EdenXboxDev' -ExpectedVersion $env:PACKAGE_VERSION
           if ($LASTEXITCODE -ne 0) { throw 'APPX validation failed.' }
           $out = 'build-uwp\package'
+          $stackReserveOverride = $null
+          if (-not [string]::IsNullOrWhiteSpace($env:STACK_RESERVE_OVERRIDE)) {
+            $stackReserveOverride = [int]::Parse($env:STACK_RESERVE_OVERRIDE, [Globalization.CultureInfo]::InvariantCulture)
+          }
           $metadata = [ordered]@{
             source_commit = $env:SOURCE_SHA
             binary_source_commit = $env:SOURCE_SHA
@@ -496,6 +543,7 @@ jobs:
             package_workflow_run_number = [long]$env:GITHUB_RUN_NUMBER
             package_workflow_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             package_version = $env:PACKAGE_VERSION
+            post_link_stack_reserve_mib = $stackReserveOverride
             windows_runner = $env:ImageOS + ' ' + $env:ImageVersion
             windows_sdk = '10.0.26100.0'
             publisher = 'CN=EdenXboxDev'
