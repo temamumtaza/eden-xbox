@@ -217,7 +217,7 @@ StorageFolder NavigateFolderPath(StorageFolder folder, std::wstring_view path,
         const auto component = path.substr(offset, length);
         if (component == L"." || component == L".." || component.empty())
             throw FolderPathFailure{L"La ruta contiene un componente no valido."};
-        folder = AwaitFolderOperation(folder.GetFolderAsync(winrt::to_hstring(component)), control);
+        folder = AwaitFolderOperation(folder.GetFolderAsync(winrt::hstring{component}), control);
         if (end == std::wstring_view::npos) break;
         offset = end + 1;
     }

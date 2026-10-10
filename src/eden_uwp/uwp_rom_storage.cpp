@@ -227,10 +227,10 @@ public:
             return {};
         }
     }
-    FileSys::VirtualFile GetFile(std::string_view name) const override {
+    FileSys::VirtualFile GetFile(std::string_view file_name) const override {
         // VfsDirectory::GetFile enumerates every sibling. Resolve the requested
         // item through WinRT so large or remote folders need only one lookup.
-        return GetFileRelative(name);
+        return GetFileRelative(file_name);
     }
     FileSys::VirtualDir GetDirectoryRelative(std::string_view relative) const override {
         if (!ValidStorageRelative(relative)) return {};
