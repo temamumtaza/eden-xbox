@@ -65,41 +65,13 @@
         <uap:Extension Category="windows.fileTypeAssociation">
           <uap:FileTypeAssociation Name="edenstorage">
             <uap:SupportedFileTypes>
-              <!-- SupportedFileTypes are case-sensitive; mirror the scanner's
-                   case-insensitive extension handling for common dump types. -->
+              <!-- Windows validates file-type associations case-insensitively, matching the
+                   scanner. Declare one canonical lowercase extension for each format. -->
               <uap:FileType>.nsp</uap:FileType>
-              <uap:FileType>.nsP</uap:FileType>
-              <uap:FileType>.nSp</uap:FileType>
-              <uap:FileType>.nSP</uap:FileType>
-              <uap:FileType>.Nsp</uap:FileType>
-              <uap:FileType>.NsP</uap:FileType>
-              <uap:FileType>.NSp</uap:FileType>
-              <uap:FileType>.NSP</uap:FileType>
               <uap:FileType>.xci</uap:FileType>
-              <uap:FileType>.xcI</uap:FileType>
-              <uap:FileType>.xCi</uap:FileType>
-              <uap:FileType>.xCI</uap:FileType>
-              <uap:FileType>.Xci</uap:FileType>
-              <uap:FileType>.XcI</uap:FileType>
-              <uap:FileType>.XCi</uap:FileType>
-              <uap:FileType>.XCI</uap:FileType>
               <uap:FileType>.nro</uap:FileType>
-              <uap:FileType>.nrO</uap:FileType>
-              <uap:FileType>.nRo</uap:FileType>
-              <uap:FileType>.nRO</uap:FileType>
-              <uap:FileType>.Nro</uap:FileType>
-              <uap:FileType>.NrO</uap:FileType>
-              <uap:FileType>.NRo</uap:FileType>
-              <uap:FileType>.NRO</uap:FileType>
               <uap:FileType>.keys</uap:FileType>
               <uap:FileType>.nca</uap:FileType>
-              <uap:FileType>.ncA</uap:FileType>
-              <uap:FileType>.nCa</uap:FileType>
-              <uap:FileType>.nCA</uap:FileType>
-              <uap:FileType>.Nca</uap:FileType>
-              <uap:FileType>.NcA</uap:FileType>
-              <uap:FileType>.NCa</uap:FileType>
-              <uap:FileType>.NCA</uap:FileType>
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>
         </uap:Extension>

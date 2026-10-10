@@ -202,6 +202,13 @@ if ($BootNro -or $gameName -or $BootCfg.Count -gt 0) {
 if ($mf.Package.Identity.Publisher -ne $PublisherCN) {
     throw "Publisher mismatch: manifest has '$($mf.Package.Identity.Publisher)' but signing with '$PublisherCN'."
 }
+$seenFileTypes = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($fileType in $mf.SelectNodes("//*[local-name()='SupportedFileTypes']/*[local-name()='FileType']")) {
+    $extension = $fileType.InnerText.Trim()
+    if (-not $extension.StartsWith('.') -or -not $seenFileTypes.Add($extension)) {
+        throw "Invalid or duplicate file type association '$extension' in AppxManifest.xml."
+    }
+}
 
 # Locate the framework before packing/signing so strict CI cannot emit a broken package.
 $vclibs = $null
