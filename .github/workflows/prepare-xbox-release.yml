@@ -114,7 +114,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: source
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify checksums and assemble one beginner-friendly bundle
@@ -129,9 +129,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$SOURCE_SHA" != "$GUIDE_SHA" || "$PACKAGE_SOURCE_SHA" != "$GUIDE_SHA" ]]; then
-            echo 'The binary, package, and release guides must come from the same source revision. Rebuild the current Xbox source before creating this release.' >&2
+          if ! git -C source merge-base --is-ancestor "$PACKAGE_SOURCE_SHA" "$GUIDE_SHA"; then
+            echo 'Release guides must be from the package source commit or a later descendant.' >&2
             exit 1
+          fi
+          if [[ "$PACKAGE_SOURCE_SHA" != "$GUIDE_SHA" ]]; then
+            guide_changes="$(git -C source diff --name-only "$PACKAGE_SOURCE_SHA" "$GUIDE_SHA")"
+            [[ -n "$guide_changes" ]] || { echo 'Guide commit differs but has no verifiable file changes.' >&2; exit 1; }
+            while IFS= read -r path; do
+              case "$path" in
+                README*.md|README*.txt|LICENSE.txt|docs/*|dist/qt_themes/default/icons/*|.github/workflows/prepare-xbox-release.yml) ;;
+                *) echo "Release guide commit contains a non-documentation change after package source: $path" >&2; exit 1 ;;
+              esac
+            done <<< "$guide_changes"
+          fi
+
+          if [[ "$SOURCE_SHA" != "$PACKAGE_SOURCE_SHA" ]]; then
+            if ! git -C source merge-base --is-ancestor "$SOURCE_SHA" "$PACKAGE_SOURCE_SHA"; then
+              echo 'The binary source must be an ancestor of the package source.' >&2
+              exit 1
+            fi
+            package_changes="$(git -C source diff --name-only "$SOURCE_SHA" "$PACKAGE_SOURCE_SHA")"
+            [[ -n "$package_changes" ]] || { echo 'Package source differs but has no verifiable file changes.' >&2; exit 1; }
+            while IFS= read -r path; do
+              case "$path" in
+                dist/uwp/AppxManifest.xml|tools/xbox/package-appx.ps1) ;;
+                *) echo "Binary-to-package change is not packaging-only: $path" >&2; exit 1 ;;
+              esac
+            done <<< "$package_changes"
           fi
           app_version="$APP_VERSION"
           bundle_root="${GITHUB_WORKSPACE}/EdenXbox-${TAG_NAME}"
@@ -199,6 +224,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TAG_NAME: ${{ inputs.tag_name }}
           PACKAGE_SOURCE_SHA: ${{ steps.metadata.outputs.package_source_sha }}
+          GUIDE_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -206,7 +232,7 @@ jobs:
             "EdenXbox-${TAG_NAME}.zip" \
             "EdenXbox-${TAG_NAME}.zip.sha256" \
             --repo "$REPOSITORY" \
-            --target "$PACKAGE_SOURCE_SHA" \
+            --target "$GUIDE_SHA" \
             --title "Eden Xbox ${TAG_NAME} — Community Preview" \
             --notes-file release-notes.md \
             --draft \

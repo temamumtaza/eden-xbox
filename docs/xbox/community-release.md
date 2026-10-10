@@ -24,6 +24,13 @@ Nintendo keys, firmware, or game dumps in source control or release assets.
    authentication, or access to private app folders. Publishing is a separate maintainer action
    from the Releases page.
 
+The signed package may reuse a successful unsigned build when only packaging inputs changed. The
+release workflow records the binary source and package source separately, requires the binary commit
+to be an ancestor of the package commit, and allows only `dist/uwp/AppxManifest.xml` and
+`tools/xbox/package-appx.ps1` to change between them. Release guides may be updated afterward only
+in documentation, README/license, logo, or release-workflow files; the workflow checks this history
+and rejects intervening source-code changes.
+
 The workflow creates drafts only; it never publishes a release automatically. Use a new tag for
 each package. Keep the signing identity stable so users can update without uninstalling and losing
 their app data. The public `.cer` is included in the bundle; the private signing key and password
